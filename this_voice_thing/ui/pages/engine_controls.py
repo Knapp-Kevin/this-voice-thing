@@ -200,6 +200,10 @@ class EngineControls:
             self.set_status_message("Status: Description changed, so a new voice will be designed.")
         if hasattr(qwen, "begin_run"):
             qwen.begin_run()
+        if qwen.mode == "voice_design":
+            # The description this run designs from, so "Keep this voice" saves the
+            # wording that made the voice even if the box is edited afterwards.
+            self.anchor_description = instruct
         key = "description" if qwen.mode == "voice_design" else "style"
         settings = self.engine_settings(qwen)
         settings.update({key: instruct, "watermark": qwen.watermark})

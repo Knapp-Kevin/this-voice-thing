@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 from this_voice_thing import paths
 from this_voice_thing.core import pronunciation, transcription, voice_library
 from this_voice_thing.integrations import google_docs, local_api
-from this_voice_thing.ui import common
+from this_voice_thing.ui import common, taskbar
 from this_voice_thing.ui import theme as ui_theme
 from this_voice_thing.ui.api_bridge import ApiBridge
 from this_voice_thing.ui.common import (
@@ -440,11 +440,14 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
 
 
 if __name__ == "__main__":
-    ui_theme.set_windows_app_id()
+    taskbar.set_process_app_id()
     app = QApplication(sys.argv)
     app.setApplicationName(ui_theme.APP_NAME)
     app.setApplicationDisplayName(ui_theme.APP_NAME)
     ui_theme.apply_theme(app)
     window = ChatterboxApp()
+    # Before show(): the taskbar button then never asks a busy window for its icon
+    # (start-up work can block the UI thread, and Windows would cache the generic icon).
+    taskbar.set_window_identity(window)
     window.show()
     sys.exit(app.exec())

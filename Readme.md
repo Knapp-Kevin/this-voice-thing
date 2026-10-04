@@ -156,7 +156,7 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 
 - Open `.txt`, `.md` and `.docx` files, or a Google Doc, while keeping the text editable.
 - Live duration, section and character estimates.
-- **Preview** about 3, 5 or 10 seconds before committing to a long render. **Keep this take** locks the preview's take; **Keep this voice** keeps a designed voice you just heard.
+- **Preview** about 3, 5 or 10 seconds before committing to a long render. **Keep this take** locks the preview's take; **Keep this voice** freezes a designed voice you just heard, after a preview or a full render.
 - Progress and time remaining during long renders. Stopping keeps finished sections as a `_partial` file.
 - Paragraph-aware sectioning: text is split where a reader would pause, never mid-phrase or across paragraphs, and pauses between sections match the kind of break.
 
@@ -169,7 +169,7 @@ Saved voices can be searched, tagged and reused across compatible engines.
 
 - **Clip voices:** recordings or imported audio plus transcript. They work with every cloning model.
 - **Preset voices:** built-in voices from engines such as Kokoro or Qwen.
-- **Designed voices:** voices created from descriptions or engine-specific attributes. **Make clip** turns one into a clip voice that any cloning model can reuse.
+- **Designed voices:** voices created from descriptions or engine-specific attributes. A description alone designs a slightly different voice each time, so once you've heard one you like, **Keep this voice** (or **Save voice**) saves that exact voice as a clip. Picking it later, even after restarting the app, renders the same voice every time. **Make clip** turns a description-only voice into a clip voice that any cloning model can reuse.
 - Record directly in the app with countdown, level monitoring, clipping and too-quiet warnings, and phonetically rich read-aloud passages.
 
 </details>
@@ -202,7 +202,7 @@ Each model tile shows:
 - expected GPU memory against the current machine (green fits, amber runs slower, red too small);
 - typical speed, learned from your own runs.
 
-**Discover on Hugging Face** searches for compatible repositories while filtering unsupported conversion formats. **+ Add repo…** lets you inspect a specific repository before downloading anything. A Hugging Face read token can be stored locally for gated or private repositories and higher Hub limits.
+**Discover on Hugging Face** searches for compatible repositories while filtering unsupported conversion formats. **+ Add repo…** lets you inspect a specific repository before downloading anything. A Hugging Face read token can be stored locally for gated or private repositories and higher Hub limits: **Get a token** on the Model page opens [Hugging Face's token page](https://huggingface.co/settings/tokens/new?tokenType=read) with the Read type already chosen.
 
 </details>
 
@@ -427,7 +427,7 @@ Your data stays in the project folder, where it has always been: `app_settings.j
 - **Window never appears:** inspect the newest `logs/app_startup_*.log`.
 - **Microphone unavailable:** verify the device and Windows desktop-app microphone permissions.
 - **Custom Hugging Face repo fails:** run **Check** in the model editor before downloading. GGUF, ONNX, MLX and partial fine-tunes are not necessarily drop-in compatible.
-- **Unauthenticated Hugging Face warning:** optional. Add a read token on the Model page if needed.
+- **Unauthenticated Hugging Face warning:** optional. If you want one, **Get a token** on the Model page creates a free read token; paste it in and Save.
 
 </details>
 

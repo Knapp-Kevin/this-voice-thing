@@ -2,7 +2,8 @@
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QDoubleSpinBox
 from PySide6.QtWidgets import QGridLayout
@@ -15,6 +16,11 @@ from PySide6.QtWidgets import QWidget
 
 from this_voice_thing.core import model_registry
 from this_voice_thing.ui import theme as ui_theme
+
+
+# Hugging Face's "new access token" page with the Read type preselected (all the app
+# needs); signed-out users sign in first and land back here.
+HF_NEW_TOKEN_URL = "https://huggingface.co/settings/tokens/new?tokenType=read"
 
 
 class ModelSettings:
@@ -34,6 +40,12 @@ class ModelSettings:
         test_token_button = QPushButton("Test")
         test_token_button.clicked.connect(self.test_hf_token)
         hf_row.addWidget(test_token_button)
+        get_token_button = self._link(QPushButton("Get a token"))
+        get_token_button.setToolTip(
+            "Opens Hugging Face in your browser to create a free Read token (sign in or sign up "
+            "first). Copy it, paste it here, then Save.")
+        get_token_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(HF_NEW_TOKEN_URL)))
+        hf_row.addWidget(get_token_button)
         hf_layout.addLayout(hf_row)
         self.hf_token_status = QLabel()
         self.hf_token_status.setObjectName("Muted")
@@ -124,7 +136,7 @@ class ModelSettings:
     def update_hf_token_status(self, message=None, ok=None):
         saved = bool(self.app_settings.get("hf_token"))
         base = ("A token is saved and used for downloads." if saved else
-                "Optional: only needed for gated or private repos.")
+                "Optional: only needed for gated or private repos. Get a token creates a free one.")
         self.hf_token_status.setText(f"{message}  {base}" if message else base)
         ui_theme.set_tone(self.hf_token_status, "success" if ok else "error" if ok is False else "")
         self.hf_token_status.setToolTip(

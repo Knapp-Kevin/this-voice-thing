@@ -280,6 +280,9 @@ class Library:
             return voice_library.Voice(name=name, kind="preset", backend=entry["backend"], repo_id=entry["repo_id"],
                                        speaker=speaker, style=style, language=language), None
         if model is not None and entry is not None and model.mode == "voice_design":
+            kept = next((voice for voice in self.voice_library.voices if voice.id == self.active_voice_id), None)
+            if getattr(model, "locked_anchor", None) and kept is not None:
+                return kept, None  # already saved (Keep this voice, or picked from the library)
             description = self.qwen_instruct_input.text().strip()
             if not description:
                 return None, "Describe the voice first (Voice description, in the Delivery card)."
@@ -297,6 +300,11 @@ class Library:
                                    clip=self.voice_library.to_stored(path)), None
 
     def save_current_voice(self):
+        if self.can_keep_designed_voice():
+            # A designed voice you've heard: save that exact voice, not just its description
+            # (which would design a different voice each time).
+            self.keep_designed_voice()
+            return
         voice, problem = self.current_voice_spec()
         if problem:
             QMessageBox.information(self, "Save Voice", problem)

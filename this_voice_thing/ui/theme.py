@@ -13,7 +13,6 @@ text fields and lists slow and glitchy.
 """
 
 import os
-import sys
 
 import numpy as np
 
@@ -135,21 +134,6 @@ def app_icon_path():
     if os.path.exists(BRAND_ICON) and not QImage(BRAND_ICON).isNull():
         return BRAND_ICON
     return FALLBACK_ICON
-
-
-WINDOWS_APP_ID = "KnappKevin.ThisVoiceThing"
-
-
-def set_windows_app_id():
-    """Give the process its own taskbar identity, so Windows shows the app icon
-    instead of grouping the window under python.exe. Call before QApplication."""
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(WINDOWS_APP_ID)
-    except Exception:
-        pass
 
 
 def app_icon():

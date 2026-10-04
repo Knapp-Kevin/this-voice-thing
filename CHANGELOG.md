@@ -7,6 +7,7 @@ All notable changes to **This Voice Thing**, which began as a fork of [AcTePuKc/
 Changes since upstream commit `22460fd` ("Add best-effort macOS/Linux shell launcher flow").
 
 ### Added
+- **Get a token.** The Model page's Hugging Face card links straight to Hugging Face's new-token page, with the Read type preselected.
 - **Transcription (speech to text).** A new **Transcribe** page turns audio into text locally with OpenAI's Whisper large-v3 turbo (MIT license, a one-time 1.6 GB download the app asks about first). Detects the language or takes one you pick, shows optional timestamps, saves text or SRT/WebVTT subtitles, and **Send to Generate** speaks the result with any voice. **Transcribe clip** in a library voice's menu fills in its transcript for cloning models, and the local API adds an OpenAI-compatible `POST /v1/audio/transcriptions`.
 - **App icon in the Windows taskbar.** The app now shows its own icon there instead of Python's, and `assets/branding/this-voice-thing.ico` is available for shortcuts.
 - **Qwen3-TTS engine (optional).** Three new models alongside Chatterbox:
@@ -67,6 +68,8 @@ Changes since upstream commit `22460fd` ("Add best-effort macOS/Linux shell laun
 - **Model settings** (repetition, min-p, top-p) are now remembered between sessions.
 
 ### Fixed
+- **Taskbar icon, for real this time.** Windows sometimes showed a generic icon because it asked the window for its icon while start-up work kept the window busy, then kept the generic one. The window now hands Windows its ID, icon file and relaunch command up front, so the brand icon always shows, and pinning the app pins This Voice Thing.
+- **Designed voices stay frozen.** **Keep this voice** now also appears after a full render, saves the description that made the voice even if you edited the box afterwards, and **Save voice** on the Voice page saves the exact voice you heard instead of only its description (which designs a new voice each time). Saving a kept voice again edits it instead of adding a duplicate.
 - **Qwen voice design no longer changes voice between sections.** The first section is designed and the rest are cloned from it with Qwen3's cloning model (voice similarity between sections 0.76 → 0.91).
 - **Long voice names no longer widen the window**; the voice chip shortens them.
 - **Kokoro's voice picker no longer widens the window** (its long voice names set the minimum width).

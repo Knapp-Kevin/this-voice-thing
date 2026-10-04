@@ -119,16 +119,24 @@ class Generation:
         self.audio_generator_thread.finished.connect(self.on_generation_thread_finished)
         self.audio_generator_thread.start()
 
+    def can_keep_designed_voice(self):
+        """True when a design model has just made a voice that isn't kept yet."""
+        model = self.active_qwen_model()
+        anchor = getattr(model, "_anchor", None)
+        return (model is not None and model.mode == "voice_design" and bool(anchor)
+                and os.path.exists(anchor[0]) and not getattr(model, "locked_anchor", None))
+
     def keep_designed_voice(self):
-        """Save the voice a design model just made (the preview's first section) to the
-        library, and lock it in for every render."""
+        """Save the voice a design model just made (the first section of the last preview
+        or render) to the library as a clip, and lock it in for every render. Picking the
+        saved voice later locks it in again, so it sounds the same every time."""
         model = self.active_qwen_model()
         anchor = getattr(model, "_anchor", None)
         if model is None or model.mode != "voice_design" or not anchor or not os.path.exists(anchor[0]):
             self.keep_voice_button.setVisible(False)
             return
         entry = self.loaded_entry()
-        description = self.qwen_instruct_input.text().strip()
+        description = getattr(self, "anchor_description", None) or self.qwen_instruct_input.text().strip()
         voice = voice_library.Voice(
             name="Designed voice", kind="design", backend=entry["backend"], repo_id=entry["repo_id"],
             mode=model_registry.entry_mode(entry) if entry["backend"] in DUAL_MODE_BACKENDS else "",
@@ -145,14 +153,16 @@ class Generation:
         voice.clip = self.voice_library.to_stored(path)
         self.voice_library.add(voice)
         model.locked_anchor = (path, anchor[1])
+        if self.qwen_instruct_input.text().strip() != description:
+            self.qwen_instruct_input.setText(description)  # the wording that made this voice
         self.locked_description = description
         self.locked_voice_name = voice.name
         self.active_voice_id = voice.id
         self.keep_voice_button.setVisible(False)
         self.refresh_voice_chip()
         self.render_voice_tiles()
-        self.set_status_message(f"Status: Kept {voice.name}. Every section now uses this voice; "
-                                "it's in the voice library too.")
+        self.set_status_message(f"Status: Kept {voice.name}. Every section now uses this exact voice, and it's "
+                                "saved in the voice library: pick it there any time to use it again.")
 
     def keep_preview_take(self):
         if self.last_preview_seed:
@@ -272,10 +282,6 @@ class Generation:
             self.last_preview_seed = thread.actual_seed_used
             self.activity_label.setText(f"Preview take {self.last_preview_seed}")
             self.keep_take_button.setVisible(self.seed_input.value() == 0)
-            designed = self.active_qwen_model()
-            self.keep_voice_button.setVisible(
-                designed is not None and designed.mode == "voice_design"
-                and getattr(designed, "_anchor", None) is not None and not getattr(designed, "locked_anchor", None))
             self.set_status_message(f"Status: Preview ready{total_generation_time_str}.")
         elif thread.partial_info:
             done, total = thread.partial_info
@@ -286,6 +292,8 @@ class Generation:
             self.set_status_message(
                 f"Status: Full audio generated: {os.path.basename(output_path)}{captions}{total_generation_time_str}")
 
+        # A designed voice can be kept after a full render too, not only a preview.
+        self.keep_voice_button.setVisible(self.can_keep_designed_voice())
         self.current_audio_file = output_path
         # ... (rest of the method same as your working version)
         self.current_file_label.setText(

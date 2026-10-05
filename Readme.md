@@ -428,6 +428,7 @@ this-voice-thing/
 │     └─ google_docs.py         Google Docs import and sign-in
 ├─ engines/<name>/              engine worker scripts, plus their own .venv once installed
 ├─ scripts/install_torch.py     picks a PyTorch build for your hardware (run by setup)
+├─ scripts/restart_app.py      closes the app gracefully (it saves its settings) and starts it again
 ├─ tests/                       automated tests (`python -m unittest discover tests`)
 ├─ assets/                      icons and branding (assets/branding/)
 ├─ docs/screenshots/            README screenshots

@@ -7,6 +7,7 @@ All notable changes to **This Voice Thing**, which began as a fork of [AcTePuKc/
 Changes since upstream commit `22460fd` ("Add best-effort macOS/Linux shell launcher flow").
 
 ### Added
+- **`scripts/restart_app.py`** (Windows) closes the app the way its close button does, so it saves its settings, then starts it again; it forces the app only if it hangs for 30 seconds. `--close` just closes it.
 - **Voice Studio.** A new **Studio** page to make voices in one place: **Clone** a recording or file (use it as is, or let a cloning model re-read a passage in that voice), **Design** from a description with several candidates at once (Qwen3, VoxCPM2, OmniVoice), or **Remix** a voice with words (VoxCPM2's styled cloning). Try any take on a test line, trim, clean up, shift pitch and speed, then **Save voice**: it's frozen as a clip and transcript, so it sounds the same in every render and batch.
 - **Voice-first Generate.** Pick a voice with **Change** (yours, or a model's built-in voices); the model list shows only the models that can speak it, and picking a clip voice loads a cloning model if needed. The Voice page is now **Voices**, a library; designing moved from Generate to the Studio (which replaces Keep this voice).
 - **Get a token.** The Model page's Hugging Face card links straight to Hugging Face's new-token page, with the Read type preselected.

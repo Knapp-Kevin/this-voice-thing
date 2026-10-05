@@ -162,6 +162,9 @@ class GeneratePage:
         generate_actions_layout.addWidget(self.preview_button)
         self.generate_button = self._accent(QPushButton("Generate Audio"))
         self.generate_button.clicked.connect(self.handle_generate_stop_toggle)
+        # It turns into Stop while rendering: never let Space or Enter (say, meant for the
+        # player) press it by accident and cut a long render short.
+        self.generate_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.generate_button.setEnabled(False)
         self.generate_button.setMinimumWidth(140)
         generate_actions_layout.addWidget(self.generate_button)

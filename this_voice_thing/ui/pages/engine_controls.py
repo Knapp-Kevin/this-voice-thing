@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QWidget
 from this_voice_thing.core import documents
 from this_voice_thing.engines import kokoro as kokoro_engine
 from this_voice_thing.engines import omnivoice as omnivoice_engine
+from this_voice_thing.engines import qwen as qwen_engine
 from this_voice_thing.engines import vibevoice as vibevoice_engine
 from this_voice_thing.engines import voxcpm as voxcpm_engine
 from this_voice_thing.ui.common import DUAL_MODE_TYPES
@@ -71,8 +72,23 @@ class EngineControls:
         if isinstance(self.model, kokoro_engine.KokoroModel) and hasattr(self, "qwen_speaker_combo"):
             self.fill_speaker_combo(self.model)
 
+    def apply_variation_default(self, qwen):
+        """Qwen's cloned voices stay closer to their reference at Variation 0.5; use that
+        while the slider is still on the shared 0.8 default, and put it back afterwards.
+        A value you set yourself is left alone."""
+        cloned = isinstance(qwen, qwen_engine.QwenModel) and qwen.mode in ("base", "voice_design")
+        value = self.temp_slider.get_value()
+        if cloned and abs(value - 0.8) < 1e-6:
+            self.temp_slider.set_value(qwen_engine.CLONE_VARIATION)
+            self.variation_adjusted = True
+        elif not cloned and getattr(self, "variation_adjusted", False):
+            if abs(value - qwen_engine.CLONE_VARIATION) < 1e-6:
+                self.temp_slider.set_value(0.8)
+            self.variation_adjusted = False
+
     def update_engine_controls(self):
         qwen = self.active_qwen_model()
+        self.apply_variation_default(qwen)
         self.qwen_row.setVisible(qwen is not None)
         self.qwen_watermark_checkbox.setVisible(qwen is not None)
         for widget in (self.exaggeration_label, self.exaggeration_slider, self.cfg_label, self.cfg_slider):

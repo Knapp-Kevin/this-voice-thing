@@ -2,9 +2,10 @@
 
 import contextlib
 import datetime
-import io
 import os
 import random
+import sys
+import threading
 import time
 import traceback
 
@@ -134,6 +135,35 @@ class ModelLoaderThread(QThread):
 # --- AudioGeneratorThread (Same as your working version with stop flag) ---
 
 
+class _ThreadQuiet:
+    """A stream that drops what one thread writes and passes everything else through."""
+
+    def __init__(self, stream, thread_id):
+        self._stream, self._thread_id = stream, thread_id
+
+    def write(self, text):
+        if threading.get_ident() == self._thread_id:
+            return len(text)
+        return self._stream.write(text)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+@contextlib.contextmanager
+def quiet_this_thread():
+    """Hide a model's console chatter while it generates, without swallowing what other
+    threads print meanwhile (contextlib.redirect_stdout is process-wide, so it hid the UI's
+    "Stop requested" message during long batches)."""
+    saved = sys.stdout, sys.stderr
+    sys.stdout = _ThreadQuiet(saved[0], threading.get_ident())
+    sys.stderr = _ThreadQuiet(saved[1], threading.get_ident())
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = saved
+
+
 class AudioGeneratorThread(QThread):
     generation_complete = Signal(str, int)
     error_occurred = Signal(str)
@@ -187,8 +217,9 @@ class AudioGeneratorThread(QThread):
             os.makedirs(self.output_dir)
 
     def stop(self):
-        print("Stop requested for audio generation thread.")
+        print("Stop requested for audio generation thread (it stops after the sections in progress).")
         self._is_stopped = True
+        self.stop_requested_at = time.monotonic()
 
     def set_seed_internal(self, seed_val: int):
         torch.manual_seed(seed_val)
@@ -270,7 +301,9 @@ class AudioGeneratorThread(QThread):
                     if all_audio_tensors and not self.preview:
                         # Keep the finished sections of a long render.
                         self.partial_info = (i, total_chunks)
-                        print(f"Stopped at section {i + 1}/{total_chunks}; saving {i} finished sections.")
+                        skipped = f"section {i + 1}" if i + 1 == total_chunks else f"sections {i + 1}-{total_chunks}"
+                        print(f"Stopped by request: saving the {i} finished sections; {skipped} of "
+                              f"{total_chunks} weren't generated.")
                         break
                     self.error_occurred.emit(
                         f"Generation stopped by user at chunk {i+1}/{total_chunks}.")
@@ -282,7 +315,7 @@ class AudioGeneratorThread(QThread):
                 span = f"{current_chunk_num}" if len(batch) == 1 else f"{current_chunk_num}-{last}"
                 print(f"\nGenerating section {span}/{total_chunks} (seed: {self.actual_seed_used}).")
                 section_started = time.monotonic()
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with quiet_this_thread():
                     if len(batch) > 1:
                         wav_tensors = self.model.generate_batch(batch, **generate_kwargs)
                     else:

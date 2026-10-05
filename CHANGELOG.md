@@ -70,6 +70,9 @@ Changes since upstream commit `22460fd` ("Add best-effort macOS/Linux shell laun
 - **Model settings** (repetition, min-p, top-p) are now remembered between sessions.
 
 ### Fixed
+- **Qwen cloned voices no longer "reset" at section seams.** A cloned or saved designed voice drifted from its reference over long sections and snapped back at the next one. Qwen cloning now uses 300-character sections (was 600) and, while Variation is on its default, a steadier 0.5; measured on a designed voice, the drift is gone and the seams match more closely.
+- **Long renders can't be cut short by a stray key.** Generate turns into Stop while rendering and kept keyboard focus, so Space or Enter could stop a render and drop its last sections. It no longer takes focus, a stop is logged again (a console redirect used to hide it), and the status says which sections weren't generated.
+- **Settings are saved when a generation starts**, not only when the app closes, so a crash or forced close doesn't lose them.
 - **Taskbar icon, for real this time.** Windows sometimes showed a generic icon because it asked the window for its icon while start-up work kept the window busy, then kept the generic one. The window now hands Windows its ID, icon file and relaunch command up front, so the brand icon always shows, and pinning the app pins This Voice Thing.
 - **Designed voices stay frozen.** **Keep this voice** now also appears after a full render, saves the description that made the voice even if you edited the box afterwards, and **Save voice** on the Voice page saves the exact voice you heard instead of only its description (which designs a new voice each time). Saving a kept voice again edits it instead of adding a duplicate.
 - **Qwen voice design no longer changes voice between sections.** The first section is designed and the rest are cloned from it with Qwen3's cloning model (voice similarity between sections 0.76 → 0.91).

@@ -26,6 +26,14 @@ BATCH_SIZE = 16
 # intonation flows through each paragraph (Chatterbox stays at 280). Beyond ~600
 # characters, delivery length starts to vary noticeably between runs.
 MAX_SECTION_CHARS = 600
+# Cloned voices (clones, and designed voices cloned from their saved clip) drift away
+# from the reference over a long section and snap back at the next one, which is
+# audible as a "reset". Measured on a designed voice: 300-character sections removed
+# the drift and gave the smoothest seams (2026-10-05). Batching keeps them fast.
+CLONE_SECTION_CHARS = 300
+# A steadier default for cloned voices: Variation 0.5 matched the reference better
+# than 0.8 (the slider's default for every engine).
+CLONE_VARIATION = 0.5
 # GPU memory grows with sections x section length (~1.2 GB per 1,000 characters on
 # the 1.7B model), so batches are also capped by characters: about 8 paragraph-length
 # sections or 16 short ones, peaking around 10 GB.
@@ -79,7 +87,7 @@ class QwenModel:
         # Sections generated per worker call. Decoding one sequence leaves the GPU mostly
         # idle (per-step overhead dominates), so batches are several times faster.
         self.batch_size = BATCH_SIZE if self.device == "cuda" else 1
-        self.max_section_chars = MAX_SECTION_CHARS
+        self.max_section_chars = CLONE_SECTION_CHARS if mode in ("base", "voice_design") else MAX_SECTION_CHARS
         self.batch_char_budget = BATCH_CHAR_BUDGET
         # Set by the UI before each generation.
         self.speaker = speakers[0] if speakers else None

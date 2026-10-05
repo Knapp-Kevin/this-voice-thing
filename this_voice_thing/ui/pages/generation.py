@@ -47,6 +47,8 @@ class Generation:
         if self.model is None:
             QMessageBox.warning(self, "Model Not Loaded", "Please load the model first.")
             return
+        # Keep the settings this render uses even if the app is closed abruptly later.
+        self.save_app_settings()
         preview_budget = None
         if preview:
             text, preview_budget = self.preview_text()
@@ -233,8 +235,10 @@ class Generation:
             self.set_status_message(f"Status: Preview ready{total_generation_time_str}.")
         elif thread.partial_info:
             done, total = thread.partial_info
+            missing = f"section {done + 1}" if done + 1 == total else f"sections {done + 1}-{total}"
             self.set_status_message(
-                f"Status: Stopped. Saved {done} of {total} sections: {os.path.basename(output_path)}")
+                f"Status: Stopped, so {missing} of {total} weren't generated. Saved the first {done}: "
+                f"{os.path.basename(output_path)}")
         else:
             captions = f" + {os.path.basename(thread.subtitle_path)}" if thread.subtitle_path else ""
             self.set_status_message(

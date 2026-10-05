@@ -116,7 +116,7 @@ class TranscribePage:
             self.set_transcribe_source(path)
 
     def transcribe_use_voice_clip(self):
-        path = self.ref_audio_path_label.toolTip()
+        path = self.reference_path
         if not path:
             QMessageBox.information(self, "Transcribe", "Pick a voice clip on the Voice page first.")
             return

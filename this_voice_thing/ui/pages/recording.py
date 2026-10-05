@@ -45,7 +45,8 @@ class Recording:
         self.mic_combo.setEnabled(has_inputs)
         self.record_button.setEnabled(has_inputs)
 
-    def open_recording_dialog(self):
+    def open_recording_dialog(self, then=None):
+        """Record a clip; `then(path)` gets the saved file (the Studio uses this)."""
         device = self.mic_combo.currentData()
         if device is None or device.isNull():
             QMessageBox.warning(self, "No Microphone",
@@ -58,8 +59,10 @@ class Recording:
         self.recording_format = dialog.audio_format
         self.recording_buffer = dialog.recorded_bytes
         self.recording_script = dialog.script_label.text()
-        self._save_recording()
+        path = self._save_recording()
         self.recording_buffer = bytearray()
+        if path and then is not None:
+            then(path)
 
     def _save_recording(self):
         audio_format = self.recording_format
@@ -101,3 +104,4 @@ class Recording:
                 "The clip was saved and selected, but almost no sound was captured.\n\n"
                 "Check that the right microphone is selected, that it isn't muted, and that "
                 "Windows allows desktop apps to use it (Settings > Privacy & security > Microphone).")
+        return output_path

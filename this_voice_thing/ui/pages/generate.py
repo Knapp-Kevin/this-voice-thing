@@ -45,9 +45,10 @@ class GeneratePage:
         self.voice_chip.setObjectName("VoiceChip")
         self.voice_chip.setTextFormat(Qt.TextFormat.PlainText)
         voice_row.addWidget(self.voice_chip)
-        change_voice_button = self._link(QPushButton("Change..."))
-        change_voice_button.clicked.connect(
-            lambda: self.sidebar.setCurrentRow(self.PAGE_VOICE))
+        change_voice_button = self._link(QPushButton("Change"))
+        change_voice_button.setToolTip("Pick one of your voices, or a model's built-in voices. The model list "
+                                       "then shows the models that can speak it.")
+        change_voice_button.setMenu(self._build_voice_menu())
         voice_row.addWidget(change_voice_button)
         voice_row.addStretch(1)
         voice_row.addWidget(QLabel("Model"))
@@ -118,13 +119,6 @@ class GeneratePage:
         self.keep_take_button.clicked.connect(self.keep_preview_take)
         self.keep_take_button.setVisible(False)
         text_status_row.addWidget(self.keep_take_button)
-        self.keep_voice_button = self._link(QPushButton("Keep this voice"))
-        self.keep_voice_button.setToolTip(
-            "Save the designed voice you just heard to the voice library and lock it in, so the full "
-            "render (and later ones) use exactly this voice instead of designing a new one.")
-        self.keep_voice_button.clicked.connect(self.keep_designed_voice)
-        self.keep_voice_button.setVisible(False)
-        text_status_row.addWidget(self.keep_voice_button)
         status_row_widget = QWidget()
         status_row_widget.setLayout(text_status_row)
         text_status_row.setContentsMargins(0, 0, 0, 0)

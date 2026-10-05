@@ -55,8 +55,8 @@ class Library:
         self.voice_search.textChanged.connect(lambda _text: self.render_voice_tiles())
         library_header.addWidget(self.voice_search)
         library_layout.addLayout(library_header)
-        library_hint = QLabel("Click a voice to use it. Clip voices work with every cloning model; "
-                              "presets and designed voices load their model.")
+        library_hint = QLabel("Click a voice to use it on Generate. New voices start in the Studio: "
+                              "record, add a file, or design one.")
         library_hint.setObjectName("Muted")
         library_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         library_layout.addWidget(library_hint)
@@ -72,13 +72,13 @@ class Library:
         self.record_button.setToolTip(
             "Record a new clip voice: read about 15 seconds in a quiet room; the first few seconds "
             f"matter most ({MIN_RECORDING_SECONDS}-{MAX_RECORDING_SECONDS} s).")
-        self.record_button.clicked.connect(self.open_recording_dialog)
+        self.record_button.clicked.connect(lambda: self.open_recording_dialog(then=self.studio_set_source))
         library_actions.addWidget(self.record_button)
         self.media_devices.audioInputsChanged.connect(self.populate_microphones)
         self.populate_microphones()
         browse_ref_button = QPushButton("Add a file...")
-        browse_ref_button.setToolTip("Add a .wav, .mp3 or .flac clip to the library and use it.")
-        browse_ref_button.clicked.connect(self.browse_reference_audio)
+        browse_ref_button.setToolTip("Open a .wav, .mp3 or .flac clip in the Studio to clean it up and save it.")
+        browse_ref_button.clicked.connect(self.studio_open_source_file)
         library_actions.addWidget(browse_ref_button)
         open_recordings_button = self._link(QPushButton("Open folder"))
         open_recordings_button.clicked.connect(self.open_recordings_folder)
@@ -92,7 +92,7 @@ class Library:
         if voice.kind == "clip":
             path = self.voice_library.clip_path(voice)
             return bool(path) and os.path.normcase(os.path.abspath(path)) == os.path.normcase(
-                os.path.abspath(self.ref_audio_path_label.toolTip() or "~none~"))
+                os.path.abspath(self.reference_path or "~none~"))
         model = self.active_qwen_model()
         return (voice.id == self.active_voice_id and model is not None
                 and getattr(model, "backend", "") == voice.backend)
@@ -165,6 +165,8 @@ class Library:
                             bool(path) and os.path.exists(path)))
             entries.append(("Make clip..." if not voice.has_clip else "Remake clip...",
                             lambda: self.make_voice_clip(voice), not self.model_busy()))
+        if path and os.path.exists(path):
+            entries.append(("Open in Studio", lambda: self.open_voice_in_studio(voice), True))
         entries += [None, ("Edit...", lambda: self.edit_voice(voice), True),
                     ("Show file in folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path))),
                      bool(path) and os.path.exists(path)),
@@ -204,13 +206,14 @@ class Library:
             if not os.path.exists(path):
                 QMessageBox.warning(self, "Voice", f"The clip for {voice.name} is missing:\n{path}")
                 return
+            if not self.model_can_clone():
+                self.load_for_clip_voice(voice)  # applied once a cloning model is ready
+                return
             self.set_reference_audio(path)
             self.active_voice_id = voice.id
-            model = self.active_qwen_model()
-            note = ""
-            if model is not None and model.mode not in ("base",):
-                note = " It's used by cloning models; the loaded model doesn't clone."
-            self.set_status_message(f"Status: Voice set to {voice.name}.{note}")
+            self.remember_clone_entry()
+            self.refresh_model_repo_options()
+            self.set_status_message(f"Status: Voice set to {voice.name}.")
             self.render_voice_tiles()
             return
         entry = self.entry_for_voice(voice)
@@ -253,7 +256,6 @@ class Library:
                 self.locked_voice_name = None
             if voice.has_clip and os.path.exists(path) and hasattr(model, "locked_anchor"):
                 model.locked_anchor = (path, voice_library.read_transcript(path))
-                self.locked_description = voice.description
                 self.locked_voice_name = voice.name
         self.update_engine_controls()
         if voice.kind == "preset":
@@ -264,71 +266,6 @@ class Library:
         self.set_status_message(f"Status: Voice set to {voice.name}.")
         self.refresh_voice_chip()
         self.render_voice_tiles()
-
-    def current_voice_spec(self):
-        """(Voice, error): the voice in use, as an unsaved library voice."""
-        model = self.active_qwen_model()
-        entry = self.loaded_entry()
-        language = self.language_combo.currentData() or ""
-        if model is not None and model.mode == "conversation":
-            return None, ("A conversation uses a cast of voices. Save each speaker's voice as a clip "
-                          "voice instead (record it, or add the file), then pick it in Cast\u2026.")
-        if model is not None and entry is not None and model.mode in ("custom_voice", "preset"):
-            speaker = self.qwen_speaker_combo.currentData() or ""
-            style = self.qwen_instruct_input.text().strip() if model.mode == "custom_voice" else ""
-            name = self.qwen_speaker_combo.currentText().split(" (")[0]
-            return voice_library.Voice(name=name, kind="preset", backend=entry["backend"], repo_id=entry["repo_id"],
-                                       speaker=speaker, style=style, language=language), None
-        if model is not None and entry is not None and model.mode == "voice_design":
-            kept = next((voice for voice in self.voice_library.voices if voice.id == self.active_voice_id), None)
-            if getattr(model, "locked_anchor", None) and kept is not None:
-                return kept, None  # already saved (Keep this voice, or picked from the library)
-            description = self.qwen_instruct_input.text().strip()
-            if not description:
-                return None, "Describe the voice first (Voice description, in the Delivery card)."
-            return voice_library.Voice(name="Designed voice", kind="design", backend=entry["backend"],
-                                       repo_id=entry["repo_id"], mode=model_registry.entry_mode(entry)
-                                       if entry["backend"] in DUAL_MODE_BACKENDS else "",
-                                       description=description, language=language), None
-        path = self.ref_audio_path_label.toolTip()
-        if not path:
-            return None, "You're using the model's default voice. Record a clip or add a file to save a voice."
-        existing = self.voice_library.find_clip(path)
-        if existing:
-            return existing, None
-        return voice_library.Voice(name=os.path.splitext(os.path.basename(path))[0], kind="clip",
-                                   clip=self.voice_library.to_stored(path)), None
-
-    def save_current_voice(self):
-        if self.can_keep_designed_voice():
-            # A designed voice you've heard: save that exact voice, not just its description
-            # (which would design a different voice each time).
-            self.keep_designed_voice()
-            return
-        voice, problem = self.current_voice_spec()
-        if problem:
-            QMessageBox.information(self, "Save Voice", problem)
-            return
-        if voice in self.voice_library.voices:
-            self.edit_voice(voice)
-            return
-        transcript = None
-        if voice.kind == "clip":
-            transcript = voice_library.read_transcript(self.voice_library.clip_path(voice))
-        dialog = VoiceDetailsDialog("Save voice", voice, self.voice_library, transcript,
-                                    offer_clip=voice.kind != "clip", parent=self)
-        if not dialog_accepted(dialog.exec()):
-            return
-        transcript = dialog.apply()
-        self.voice_library.add(voice)
-        if transcript is not None:
-            voice_library.write_transcript(self.voice_library.clip_path(voice), transcript)
-            self.load_reference_transcript(self.voice_library.clip_path(voice))
-        self.active_voice_id = voice.id
-        self.set_status_message(f"Status: Saved {voice.name} to the voice library.")
-        self.render_voice_tiles()
-        if dialog.make_clip():
-            self.make_voice_clip(voice)
 
     def edit_voice(self, voice):
         path = self.voice_library.clip_path(voice)

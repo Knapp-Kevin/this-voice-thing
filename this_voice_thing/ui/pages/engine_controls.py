@@ -102,11 +102,12 @@ class EngineControls:
             self.qwen_speaker_label.setText("Voice" if mode == "preset" else "Speaker")
             for widget in (self.qwen_speaker_label, self.qwen_speaker_combo):
                 widget.setVisible(mode in ("custom_voice", "preset"))
+            # Voices are designed in the Studio; Generate only takes a style where a model has one.
             for widget in (self.qwen_instruct_label, self.qwen_instruct_input):
-                widget.setVisible(mode in ("custom_voice", "voice_design") or (voxcpm and mode == "base"))
+                widget.setVisible(mode == "custom_voice" or (voxcpm and mode == "base"))
             for widget in (self.qwen_transcript_label, self.qwen_transcript_input):
                 widget.setVisible(mode == "base")
-            self.design_attributes_button.setVisible(omnivoice and mode == "voice_design")
+            self.design_attributes_button.setVisible(False)
             conversation = mode == "conversation"
             for widget in (self.cast_title, self.cast_label, self.cast_button):
                 widget.setVisible(conversation)
@@ -129,7 +130,7 @@ class EngineControls:
 
     def refresh_voice_chip(self):
         qwen = self.active_qwen_model()
-        reference = self.ref_audio_path_label.toolTip()
+        reference = self.reference_path
         if qwen is not None and qwen.mode == "conversation":
             speakers = self.script_speakers()
             text = f"Cast: {len(speakers)} voice{'s' if len(speakers) != 1 else ''}"
@@ -143,15 +144,15 @@ class EngineControls:
             text, tip = f"Designed: {name}", ("Locked to a voice you kept: every section uses it. Change "
                                               "the description to design a new voice.")
         elif qwen is not None and qwen.mode == "voice_design":
-            text, tip = "Designed voice", "Described in the Delivery card below. Preview, then Keep this voice to lock it."
+            text, tip = "No voice picked", "Pick a designed voice with Change, or make one in the Studio."
         elif reference:
             saved = self.voice_library.find_clip(reference)
             text, tip = (saved.name if saved else os.path.basename(reference)), reference
         else:
             text = "Default voice"
-            tip = "The model's built-in voice. Pick a reference clip on the Voice page to clone a voice."
+            tip = "Chatterbox's built-in voice. Pick one of your voices with Change."
             if qwen is not None:
-                text, tip = "No clip selected", "This cloning model needs a reference clip from the Voice page."
+                text, tip = "No voice picked", "This cloning model needs a voice: pick one with Change."
         self.voice_chip.setText(text)
         self.voice_chip.setToolTip(tip)
 
@@ -161,10 +162,11 @@ class EngineControls:
         if qwen is None:
             return None
         instruct = self.qwen_instruct_input.text().strip()
-        if qwen.mode == "voice_design" and not instruct:
-            return "Describe the voice you want (Voice description, in the Delivery card) first."
-        if qwen.mode == "base" and not self.ref_audio_path_label.toolTip():
-            return "Choose a reference clip on the Voice page; this cloning model needs one."
+        if qwen.mode == "voice_design" and not getattr(qwen, "locked_anchor", None):
+            return ("Pick a designed voice with Change (next to Voice), or design one in the Studio. "
+                    "Designed voices are saved there, so every render sounds the same.")
+        if qwen.mode == "base" and not self.reference_path:
+            return "Pick a voice with Change (next to Voice); this cloning model needs one."
         if isinstance(qwen, vibevoice_engine.VibeVoiceModel):
             speakers = self.script_speakers()
             if len(speakers) > vibevoice_engine.MAX_SPEAKERS:
@@ -194,16 +196,8 @@ class EngineControls:
             return None
         qwen.instruct = instruct
         qwen.ref_text = self.qwen_transcript_input.text().strip() if qwen.mode == "base" else ""
-        if getattr(qwen, "locked_anchor", None) and instruct != getattr(self, "locked_description", instruct):
-            qwen.locked_anchor = None  # the description changed: design a new voice
-            self.locked_voice_name = None
-            self.set_status_message("Status: Description changed, so a new voice will be designed.")
         if hasattr(qwen, "begin_run"):
             qwen.begin_run()
-        if qwen.mode == "voice_design":
-            # The description this run designs from, so "Keep this voice" saves the
-            # wording that made the voice even if the box is edited afterwards.
-            self.anchor_description = instruct
         key = "description" if qwen.mode == "voice_design" else "style"
         settings = self.engine_settings(qwen)
         settings.update({key: instruct, "watermark": qwen.watermark})
@@ -253,7 +247,7 @@ class EngineControls:
             return
         self.voice_library.import_recordings()
         recordings = [(voice.name, self.voice_library.clip_path(voice)) for voice in self.voice_library.clip_voices()]
-        reference = self.ref_audio_path_label.toolTip()
+        reference = self.reference_path
         if reference and reference not in {path for _name, path in recordings}:
             recordings.insert(0, (os.path.basename(reference), reference))
         dialog = CastDialog(speakers, self.current_cast(speakers), model.sample_paths, recordings, self)

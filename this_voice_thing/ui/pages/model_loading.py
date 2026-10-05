@@ -37,6 +37,10 @@ class ModelLoading:
         self.refresh_model_repo_tooltip()
         self.refresh_language_options()
         if self.entry_key(entry) != self.loaded_entry_key():
+            voice = next((item for item in self.voice_library.voices if item.id == self.active_voice_id), None)
+            if (voice is not None and voice.has_clip and self.generate_voice_kind() == "design"
+                    and model_registry.capability_for(entry) == "clone"):
+                self.pending_clip_pick = voice  # a frozen designed voice moves to the cloning model
             self.load_model(entry)
 
     def get_selected_model_repo(self):
@@ -55,11 +59,13 @@ class ModelLoading:
             selected_label = self.model_repo_combo.currentText()
 
         visible_entries = self.get_visible_model_entries()
+        # Voice first: only the models that can speak the voice in use are offered.
+        fitting = [entry for entry in visible_entries if self.entry_fits_voice(entry)] or visible_entries
         self.model_repo_combo.blockSignals(True)
         self.model_repo_combo.clear()
         header_font = QFont(self.model_repo_combo.font())
         header_font.setBold(True)
-        for _capability, title, members in model_registry.group_by_capability(visible_entries):
+        for _capability, title, members in model_registry.group_by_capability(fitting):
             self.model_repo_combo.addItem(title.upper(), None)
             header = self.model_repo_combo.model().item(self.model_repo_combo.count() - 1)
             header.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -202,7 +208,11 @@ class ModelLoading:
             self.pending_clip_voice = None
             if self.voice_is_active(clip_voice):
                 self.make_voice_clip(clip_voice)
+        self.apply_pending_clip_pick()
+        self.remember_clone_entry()
+        self.refresh_model_repo_options()
         self.render_voice_tiles()
+        self.run_pending_studio()
 
     def on_model_loaded(self, model_instance, device_used):
         self.model_is_warm = False
@@ -237,6 +247,7 @@ class ModelLoading:
 
     def on_model_load_error(self, error_msg):
         self.model = None
+        self.pending_studio = None
         self.set_status_message(f"Status: Model load failed. {error_msg}")
         self.generate_button.setEnabled(False)
         self.preview_button.setEnabled(False)

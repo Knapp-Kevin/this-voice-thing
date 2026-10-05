@@ -284,7 +284,7 @@ class AdvancedPage:
             raise local_api.ApiError(409, "No model is loaded in the app.")
         model = self.model
         text = request["text"]
-        reference = self.ref_audio_path_label.toolTip() or None
+        reference = self.reference_path or None
         voice_label = self.voice_chip.text()
         worker = self.active_qwen_model()
         if worker is not None:
@@ -437,7 +437,7 @@ class AdvancedPage:
         if getattr(self, "speak_thread", None) is not None and self.speak_thread.isRunning():
             return
         kwargs = {"language_id": self.language_combo.currentData() or "en"}
-        reference = self.ref_audio_path_label.toolTip()
+        reference = self.reference_path
         if self.active_qwen_model() is not None:
             problem = self.prepare_qwen_generation()
             if problem:

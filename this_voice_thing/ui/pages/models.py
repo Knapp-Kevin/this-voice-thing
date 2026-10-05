@@ -134,7 +134,8 @@ class ModelPage:
         return self.model is not None and self.entry_key(entry) == self.loaded_entry_key()
 
     def model_busy(self):
-        return getattr(self, "model_is_loading", False) or self.is_generating or getattr(self, "api_busy", False)
+        return (getattr(self, "model_is_loading", False) or self.is_generating or getattr(self, "api_busy", False)
+                or getattr(self, "studio_busy", False))
 
     def render_model_tiles(self):
         if not hasattr(self, "capability_tabs"):

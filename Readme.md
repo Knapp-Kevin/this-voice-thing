@@ -87,6 +87,13 @@ Windows remains the primary maintained path. Installer decisions are written to 
 </details>
 
 <details>
+<summary><strong>Studio</strong>: clone, design and remix voices</summary>
+
+![Studio designing three candidate voices from one description, with refine and save controls](docs/screenshots/studio.png)
+
+</details>
+
+<details>
 <summary><strong>Voices</strong>: voice library and recording</summary>
 
 | Voice library | Recording a reference clip |
@@ -127,14 +134,15 @@ Current additions include:
 - **Six speech engines grouped by capability.** Chatterbox, Qwen3-TTS, VoxCPM2, OmniVoice, VibeVoice and Kokoro provide different combinations of cloning, preset voices, voice design and conversations.
 - **Multi-speaker conversations.** VibeVoice performs scripts with a different voice for each speaker.
 - **Model-aware hardware guidance.** Model tiles show licensing, expected download size and GPU-memory requirements against the current machine.
-- **In-app recording and voice management.** Record reference clips, import audio, and save clip, preset and designed voices to a reusable library.
+- **A voice Studio.** Clone a recording, design a voice from a description (several candidates at once), or remix a voice with words; clean it up, adjust pitch and speed, and save it frozen so it sounds the same in every render.
+- **Voice first.** Generate starts from a saved voice, and only offers the models that can speak it.
 - **Document narration.** Open long text, documents and Google Docs, preview a few seconds, estimate generation time, render in sensible sections, and keep partial work if generation is stopped.
 - **Hugging Face model discovery.** Search compatible models, inspect compatibility and licensing, and add supported repositories without hand-editing configuration files.
 - **Transcription.** Turn audio into text with Whisper, save it as text or subtitles, fill in a voice clip's transcript, or send it back to Generate.
 - **Pronunciation controls and subtitles.** Maintain a pronunciation dictionary and generate SRT or WebVTT from the known generation timeline.
 - **Audio finishing.** Adjust paragraph pauses, even out volume, trim silence, change speed or pitch, and export WAV, FLAC or MP3.
 - **A local HTTP API.** Use the same engines and voice library from other software through OpenAI-compatible or native endpoints.
-- **A redesigned desktop interface.** Generate, Voice, Transcribe, Model, Advanced and Log pages with light and dark themes.
+- **A redesigned desktop interface.** Generate, Studio, Voices, Transcribe, Model, Advanced and Log pages with light and dark themes.
 
 In other words, calling the whole thing “Chatterbox UI” eventually became less a name and more a historical anecdote.
 
@@ -143,8 +151,9 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 <details>
 <summary><strong>Generate</strong></summary>
 
-- A model switcher across every engine you've added, and per-model time estimates for the current text (click the estimate to compare and switch).
-- Plain-language delivery controls, with engine-specific settings where they apply: speaker and style for Qwen, voice per language for Kokoro, style and clip transcript for VoxCPM, voice attributes for OmniVoice, and a cast of voices for VibeVoice.
+- **Voice first:** pick a voice with **Change** (one of yours, or a model's built-in voices), and the model list shows only the models that can speak it. A clip or Studio voice works with every cloning model; picking one while a non-cloning model is loaded loads a cloning model for you.
+- Per-model time estimates for the current text (click the estimate to compare and switch).
+- Plain-language delivery controls, with engine-specific settings where they apply: speaker and style for Qwen, voice per language for Kokoro, style and clip transcript for VoxCPM, and a cast of voices for VibeVoice. Designing a voice happens in the Studio.
 - Variation and take-number controls for repeatable takes where supported.
 - Language selection based on the active model.
 - A built-in player with history, seeking and optional auto-play.
@@ -156,21 +165,35 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 
 - Open `.txt`, `.md` and `.docx` files, or a Google Doc, while keeping the text editable.
 - Live duration, section and character estimates.
-- **Preview** about 3, 5 or 10 seconds before committing to a long render. **Keep this take** locks the preview's take; **Keep this voice** freezes a designed voice you just heard, after a preview or a full render.
+- **Preview** about 3, 5 or 10 seconds before committing to a long render. **Keep this take** locks the preview's take.
 - Progress and time remaining during long renders. Stopping keeps finished sections as a `_partial` file.
 - Paragraph-aware sectioning: text is split where a reader would pause, never mid-phrase or across paragraphs, and pauses between sections match the kind of break.
 
 </details>
 
 <details>
+<summary><strong>Studio</strong></summary>
+
+One place to make a voice, so generating is just a matter of picking it. Every voice the Studio saves is frozen: a clip plus the words it says. Any cloning model can speak it, and it sounds the same in every render and batch.
+
+- **Clone:** record (with the guided recorder), open a file, or start from a library voice. Fill in what it says with **Transcribe** (Whisper). Use the clip as it is, or have a cloning model (Chatterbox, Qwen3, VoxCPM2, OmniVoice) re-read a passage in that voice for cleaner takes, with Chatterbox's expressiveness and pacing.
+- **Design:** describe a voice (or pick OmniVoice attributes) and make 1 to 4 candidates at once with Qwen3, VoxCPM2 or OmniVoice. Each take is a different voice from the same description; keep the one you like, or change the wording and roll again.
+- **Remix:** start from a voice and change it with words, such as "older, slower and warmer", using VoxCPM2's styled cloning.
+- **Try it:** hear the selected take say any test line before you commit.
+- **Refine:** keep just part of a clip, trim silence, even out the volume, and shift pitch or speed (formant-preserving with FFmpeg's Rubber Band). **Apply to take** makes a new take to compare.
+- **Save voice** puts the selected take in the library with its name, tags and notes.
+
+</details>
+
+<details>
 <summary><strong>Voice library</strong></summary>
 
-Saved voices can be searched, tagged and reused across compatible engines.
+The **Voices** page holds your saved voices: search, tag, rename, preview, and click one to use it on Generate. New voices start in the Studio.
 
 - **Clip voices:** recordings or imported audio plus transcript. They work with every cloning model.
 - **Preset voices:** built-in voices from engines such as Kokoro or Qwen.
-- **Designed voices:** voices created from descriptions or engine-specific attributes. A description alone designs a slightly different voice each time, so once you've heard one you like, **Keep this voice** (or **Save voice**) saves that exact voice as a clip. Picking it later, even after restarting the app, renders the same voice every time. **Make clip** turns a description-only voice into a clip voice that any cloning model can reuse.
-- Record directly in the app with countdown, level monitoring, clipping and too-quiet warnings, and phonetically rich read-aloud passages.
+- **Designed and remixed voices:** made in the Studio and saved frozen as a clip, so picking one later, even after restarting the app, renders the same voice every time. **Open in Studio** (in a voice's ⋯ menu) brings any voice back to refine it. **Make clip** turns an older description-only voice into a clip voice.
+- Record with countdown, level monitoring, clipping and too-quiet warnings, and phonetically rich read-aloud passages; recordings open in the Studio.
 
 </details>
 
@@ -378,7 +401,7 @@ this-voice-thing/
 │  │  ├─ main_window.py         the window: sidebar, page layout, settings (run as __main__)
 │  │  ├─ pages/                 one module per page, mixed into the window:
 │  │  │                         generate, generation, documents, estimates, finishing, engine_controls, player,
-│  │  │                         voice, library, recording, transcribe, models, discover, model_loading,
+│  │  │                         studio, voice, voice_picker, library, recording, transcribe, models, discover, model_loading,
 │  │  │                         model_settings, advanced
 │  │  ├─ dialogs/               recording, find/add models, voices and cast, pronunciation, Google Docs
 │  │  ├─ threads.py             model loading, generation, installs, speech and transcription threads
@@ -398,6 +421,7 @@ this-voice-thing/
 │  │  ├─ subtitles.py           SRT/WebVTT from the render timeline
 │  │  ├─ pronunciation.py       pronunciation dictionary
 │  │  ├─ transcription.py       speech to text with Whisper
+│  │  ├─ voice_studio.py        designing, cloning, remixing and refining voices for the Studio
 │  │  └─ voice_library.py       saved clip, preset and designed voices
 │  └─ integrations/
 │     ├─ local_api.py           local OpenAI-compatible and native HTTP API

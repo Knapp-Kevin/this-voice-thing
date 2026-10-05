@@ -40,6 +40,7 @@ class Voice:
     style: str = ""               # preset (Qwen): style instruction
     description: str = ""         # design: the description or attributes
     language: str = ""
+    origin: str = ""              # Studio: "recorded" | "cloned" | "designed" | "remixed"
 
     @property
     def has_clip(self):

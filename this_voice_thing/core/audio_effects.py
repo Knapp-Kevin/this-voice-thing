@@ -171,6 +171,19 @@ def _even_volume(wav):
     return (wav * gain).astype(np.float32)
 
 
+# Public names for the Voice Studio's clip editing.
+def trim_silence(wav, sr):
+    return _trim_silence(wav, sr)[0]
+
+
+def even_volume(wav):
+    return _even_volume(wav)
+
+
+def stretch_and_shift(wav, sr, speed=1.0, semitones=0.0, log=print):
+    return _stretch_and_shift(wav, sr, speed, semitones, log)
+
+
 def seam_gap(boundary, paragraph_pause):
     """Seconds of silence after a section, by the kind of seam that follows it."""
     if boundary == "clause":

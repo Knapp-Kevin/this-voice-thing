@@ -59,12 +59,14 @@ from this_voice_thing.ui.pages.model_settings import ModelSettings
 from this_voice_thing.ui.pages.models import ModelPage
 from this_voice_thing.ui.pages.player import Player
 from this_voice_thing.ui.pages.recording import Recording
+from this_voice_thing.ui.pages.studio import StudioPage
 from this_voice_thing.ui.pages.transcribe import TranscribePage
 from this_voice_thing.ui.pages.voice import VoicePage
+from this_voice_thing.ui.pages.voice_picker import VoicePicker
 
 
 class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, EngineControls, Player,
-                    VoicePage, Library, Recording, TranscribePage, ModelPage, Discover, ModelLoading, ModelSettings,
+                    StudioPage, VoicePage, VoicePicker, Library, Recording, TranscribePage, ModelPage, Discover, ModelLoading, ModelSettings,
                     AdvancedPage, QMainWindow):
     log_message_signal = Signal(str)
 
@@ -171,7 +173,7 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
             self.generate_button.setEnabled(False)
         QTimer.singleShot(0, self.restart_api_server)
 
-    PAGE_GENERATE, PAGE_VOICE, PAGE_TRANSCRIBE, PAGE_MODEL, PAGE_ADVANCED, PAGE_LOG = range(6)
+    PAGE_GENERATE, PAGE_STUDIO, PAGE_VOICE, PAGE_TRANSCRIBE, PAGE_MODEL, PAGE_ADVANCED, PAGE_LOG = range(7)
 
     def _make_card(self, title=None):
         card = ui_theme.CardFrame()
@@ -230,7 +232,7 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
         self.sidebar.setObjectName("Sidebar")
         self.sidebar.setFixedWidth(180)
         self.sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        for label in ("Generate", "Voice", "Transcribe", "Model", "Advanced", "Log"):
+        for label in ("Generate", "Studio", "Voices", "Transcribe", "Model", "Advanced", "Log"):
             self.sidebar.addItem(QListWidgetItem(label))
         title_row = QHBoxLayout()
         title_row.setContentsMargins(18, 16, 12, 10)
@@ -257,6 +259,7 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
         root_layout.addWidget(content_area, 1)
 
         self._build_generate_page()
+        self._build_studio_page()
         self._build_voice_page()
         self._build_transcribe_page()
         self._build_model_page()
@@ -408,6 +411,8 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
     OPENAI_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"}
 
     def on_page_changed(self, page):
+        if page == self.PAGE_STUDIO and not self.studio_busy:
+            self._fill_studio_engines()  # models may have been added or installed meanwhile
         if page == self.PAGE_MODEL and getattr(self, "discover_results", None) is None \
                 and getattr(self, "discover_thread", None) is None:
             self.start_discover()

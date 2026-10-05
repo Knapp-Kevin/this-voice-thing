@@ -402,7 +402,7 @@ this-voice-thing/
 │  │  ├─ pages/                 one module per page, mixed into the window:
 │  │  │                         generate, generation, documents, estimates, finishing, engine_controls, player,
 │  │  │                         studio, voice, voice_picker, library, recording, transcribe, models, discover, model_loading,
-│  │  │                         model_settings, advanced
+│  │  │                         model_settings, advanced, api_server, pronunciations
 │  │  ├─ dialogs/               recording, find/add models, voices and cast, pronunciation, Google Docs
 │  │  ├─ threads.py             model loading, generation, installs, speech and transcription threads
 │  │  ├─ api_bridge.py          hands local API requests to the window

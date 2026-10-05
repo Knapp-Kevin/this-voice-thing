@@ -46,6 +46,7 @@ from this_voice_thing.ui.common import (
     write_json_payload,
 )
 from this_voice_thing.ui.pages.advanced import AdvancedPage
+from this_voice_thing.ui.pages.api_server import ApiServer
 from this_voice_thing.ui.pages.discover import Discover
 from this_voice_thing.ui.pages.documents import Documents
 from this_voice_thing.ui.pages.engine_controls import EngineControls
@@ -58,6 +59,7 @@ from this_voice_thing.ui.pages.model_loading import ModelLoading
 from this_voice_thing.ui.pages.model_settings import ModelSettings
 from this_voice_thing.ui.pages.models import ModelPage
 from this_voice_thing.ui.pages.player import Player
+from this_voice_thing.ui.pages.pronunciations import Pronunciations
 from this_voice_thing.ui.pages.recording import Recording
 from this_voice_thing.ui.pages.studio import StudioPage
 from this_voice_thing.ui.pages.transcribe import TranscribePage
@@ -67,7 +69,7 @@ from this_voice_thing.ui.pages.voice_picker import VoicePicker
 
 class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, EngineControls, Player,
                     StudioPage, VoicePage, VoicePicker, Library, Recording, TranscribePage, ModelPage, Discover, ModelLoading, ModelSettings,
-                    AdvancedPage, QMainWindow):
+                    AdvancedPage, ApiServer, Pronunciations, QMainWindow):
     log_message_signal = Signal(str)
 
     def __init__(self):

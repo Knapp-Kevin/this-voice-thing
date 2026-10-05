@@ -57,7 +57,7 @@ If you are on Windows and just want the app to work, use this section. You do **
 
 ### 1. Install the two required tools
 
-Install **Python 3.11** from [python.org](https://www.python.org/downloads/release/python-3119/).
+Install **Python 3.11 or newer** from [python.org](https://www.python.org/downloads/windows/).
 
 During the Python installer, enable **Add python.exe to PATH**. Then open **Command Prompt** and verify:
 
@@ -65,7 +65,7 @@ During the Python installer, enable **Add python.exe to PATH**. Then open **Comm
 python --version
 ```
 
-You should see Python 3.11.x.
+The exact system Python version is not important as long as that command works. The launcher uses `uv` to create the app's required Python 3.11 environment.
 
 Next install **uv**, which manages the app's Python environment and packages:
 
@@ -419,7 +419,7 @@ Community fine-tunes may add other languages. Use **Check** before assuming a Hu
 <details>
 <summary><strong>Software, hardware and disk space</strong></summary>
 
-1. **Windows:** Python 3.11 available as the `python` command. The maintained launcher creates its own Python 3.11 environment.
+1. **Windows:** a working Python installation available as the `python` command. Python 3.11 or newer is the simplest choice. The maintained launcher creates its own Python 3.11 environment with `uv`.
 2. **`uv`:** install with `python -m pip install uv`, then verify with `uv --version`. The [official uv installation guide](https://github.com/astral-sh/uv#installation) has alternative installation methods.
 3. **NVIDIA GPU recommended.** CPU operation is possible for some engines but considerably slower. A GPU is not required merely to install or open the application.
 4. **FFmpeg recommended, not required for first launch.** It enables broader audio-format support plus higher-quality speed/pitch processing.

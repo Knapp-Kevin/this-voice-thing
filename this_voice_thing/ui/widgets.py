@@ -9,6 +9,34 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QSizePolicy, QSlider
 from this_voice_thing.ui import theme as ui_theme
 
 
+class ElidedLabel(QLabel):
+    """Shows as much of its text as fits its width, ending in an ellipsis (full text in the
+    tooltip), so long text never sets the window's minimum width."""
+
+    def __init__(self, text=""):
+        super().__init__()
+        self.full_text = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(40)
+        self.setText(text)
+
+    def setText(self, text):
+        self.full_text = text or ""
+        self.setToolTip(self.full_text)
+        self._fit()
+
+    def text(self):
+        return self.full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self):
+        super().setText(self.fontMetrics().elidedText(self.full_text, Qt.TextElideMode.ElideRight,
+                                                      max(0, self.width())))
+
+
 class ElidingChip(QLabel):
     """A label that shortens long text with an ellipsis instead of widening the window."""
 

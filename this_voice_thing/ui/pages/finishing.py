@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QWidget
 
 from this_voice_thing.core import audio_effects
 from this_voice_thing.ui.common import LOSSLESS_FORMATS
+from this_voice_thing.ui.widgets import ElidedLabel
 
 
 class Finishing:
@@ -22,10 +23,10 @@ class Finishing:
         self.finishing_toggle.clicked.connect(
             lambda: self.set_finishing_expanded(self.finishing_panel.isHidden()))
         finishing_header.addWidget(self.finishing_toggle)
-        self.finishing_summary_label = QLabel()
+        # Elided to fit: with several effects on, the summary would otherwise widen the window.
+        self.finishing_summary_label = ElidedLabel()
         self.finishing_summary_label.setObjectName("Muted")
-        finishing_header.addWidget(self.finishing_summary_label)
-        finishing_header.addStretch(1)
+        finishing_header.addWidget(self.finishing_summary_label, 1)
         delivery_layout.addLayout(finishing_header)
 
         self.finishing_panel = QWidget()

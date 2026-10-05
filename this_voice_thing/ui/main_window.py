@@ -65,10 +65,11 @@ from this_voice_thing.ui.pages.studio import StudioPage
 from this_voice_thing.ui.pages.transcribe import TranscribePage
 from this_voice_thing.ui.pages.voice import VoicePage
 from this_voice_thing.ui.pages.voice_picker import VoicePicker
+from this_voice_thing.ui.pages.voice_use import VoiceUse
 
 
 class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, EngineControls, Player,
-                    StudioPage, VoicePage, VoicePicker, Library, Recording, TranscribePage, ModelPage, Discover, ModelLoading, ModelSettings,
+                    StudioPage, VoicePage, VoicePicker, Library, VoiceUse, Recording, TranscribePage, ModelPage, Discover, ModelLoading, ModelSettings,
                     AdvancedPage, ApiServer, Pronunciations, QMainWindow):
     log_message_signal = Signal(str)
 

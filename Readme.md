@@ -53,22 +53,111 @@ See [CHANGELOG.md](CHANGELOG.md) for the long version of how this got out of han
 
 ## Quick Start
 
-1. Clone or download this repository:
+If you are on Windows and just want the app to work, use this section. You do **not** need an OpenAI API key, a Hugging Face account, or prior Python experience for normal local generation.
 
-   ```bash
-   git clone https://github.com/Knapp-Kevin/this-voice-thing
-   cd this-voice-thing
-   ```
+### 1. Install the two required tools
 
-2. On Windows, double-click **`run.bat`**. It creates or repairs `.venv`, installs the locked dependencies, picks a PyTorch build for your GPU, and starts the app. The first run downloads the default Chatterbox model.
-3. Write or open text on the **Generate** page, then **Preview** and **Generate Audio**.
-4. Record or import voices on the **Voice** page.
-5. Switch engines, install optional ones, and find more models on the **Model** page.
+Install **Python 3.11** from [python.org](https://www.python.org/downloads/release/python-3119/).
 
-Launchers:
+During the Python installer, enable **Add python.exe to PATH**. Then open **Command Prompt** and verify:
 
-- `run.bat`: prepares or repairs the environment, then starts the app.
-- `setup_env.bat`: runs setup by itself and writes installer logs to `logs/`.
+```bat
+python --version
+```
+
+You should see Python 3.11.x.
+
+Next install **uv**, which manages the app's Python environment and packages:
+
+```bat
+python -m pip install uv
+```
+
+Verify that Windows can find it:
+
+```bat
+uv --version
+```
+
+If either command says it is not recognized, close and reopen Command Prompt after installation. If it still fails, see [Troubleshooting](#troubleshooting).
+
+> [!NOTE]
+> **FFmpeg is optional for initial setup.** Install it later if you want MP3 support and the best speed/pitch processing. The app itself can start without it.
+
+### 2. Download This Voice Thing
+
+Choose **one** method.
+
+**Easiest: download a ZIP**
+
+1. On this GitHub page, click **Code → Download ZIP**.
+2. Open the downloaded ZIP.
+3. Extract the entire folder somewhere you can keep it, such as `Documents\This Voice Thing`.
+4. Open the extracted folder. Do not run the app from inside the ZIP preview.
+
+**Or, if you use Git:**
+
+```bat
+git clone https://github.com/Knapp-Kevin/this-voice-thing
+cd this-voice-thing
+```
+
+### 3. Start the app
+
+Double-click **`run.bat`**.
+
+That is the normal launcher. You do **not** need to run `setup_env.bat` first.
+
+On the first run, the launcher will:
+
+1. create the private `.venv` Python environment used by the app;
+2. install the locked Python dependencies;
+3. choose and install the appropriate PyTorch build for your hardware;
+4. start This Voice Thing;
+5. download the default Chatterbox model when it is first needed.
+
+Keep the setup window open while it works. Later launches reuse the environment and are much shorter.
+
+If setup fails, the launcher tells you where the installer log was written. Look in the repo's **`logs`** folder for the newest `installer_*.log`.
+
+### 4. Make your first audio
+
+When the app opens:
+
+1. Go to **Generate**.
+2. Type or paste a short sentence into the text box.
+3. Keep the default model and voice for the first test.
+4. Click **Preview** to make a short sample.
+5. If it sounds right, click **Generate Audio**.
+6. Play the result in the built-in player. Generated files are also kept under `chatterbox_outputs/`.
+
+Once that works, the rest of the app is safe to explore:
+
+- **Studio** creates, clones, remixes and refines voices.
+- **Voices** stores the voices you save.
+- **Transcribe** turns recordings into text.
+- **Model** switches engines, installs optional models and discovers compatible Hugging Face models.
+- **Advanced** contains pronunciation, audio finishing, export and local API settings.
+
+Optional engines install their own isolated environments when you first choose them. That is expected and prevents their incompatible dependencies from breaking the main app.
+
+### 5. Normal use after installation
+
+After the first successful setup, just double-click **`run.bat`** whenever you want to use the app. The launcher checks the environment, repairs it when needed, and then starts the application.
+
+You normally should **not**:
+
+- activate the virtual environment yourself;
+- run `setup_env.bat` separately;
+- install packages into `.venv` by hand;
+- copy optional-engine packages into the main environment.
+
+Those are troubleshooting or development tasks, not normal use.
+
+### Launchers
+
+- `run.bat`: **Windows users should start here.** It prepares or repairs the environment, then launches the app.
+- `setup_env.bat`: setup only. Useful for troubleshooting or development.
 - `run.sh` + `setup_env.sh`: best-effort macOS/Linux equivalents, not validated to the same level as Windows.
 
 Windows remains the primary maintained path. Installer decisions are written to `logs/installer_*.log`; start-up problems to `logs/app_startup_*.log`.
@@ -330,12 +419,13 @@ Community fine-tunes may add other languages. Use **Check** before assuming a Hu
 <details>
 <summary><strong>Software, hardware and disk space</strong></summary>
 
-1. **Python 3.11** for the maintained Windows launcher path.
-2. **`uv`** for Python environment/package management: <https://github.com/astral-sh/uv#installation>
-3. **NVIDIA GPU recommended.** CPU operation is possible for some engines but considerably slower.
-4. **FFmpeg recommended** for high-quality speed/pitch processing.
-5. **Disk space:** allow substantial room for PyTorch environments and model weights. Individual engines and models can take several gigabytes each.
-6. **Internet access** for initial setup and model downloads. Generation runs offline afterwards for installed models.
+1. **Windows:** Python 3.11 available as the `python` command. The maintained launcher creates its own Python 3.11 environment.
+2. **`uv`:** install with `python -m pip install uv`, then verify with `uv --version`. The [official uv installation guide](https://github.com/astral-sh/uv#installation) has alternative installation methods.
+3. **NVIDIA GPU recommended.** CPU operation is possible for some engines but considerably slower. A GPU is not required merely to install or open the application.
+4. **FFmpeg recommended, not required for first launch.** It enables broader audio-format support plus higher-quality speed/pitch processing.
+5. **Disk space:** allow substantial room for PyTorch environments and model weights. Individual engines and models can take several gigabytes each. Do not assume the source-code download size represents the installed size.
+6. **Internet access** for initial setup and model downloads. Generation runs offline afterwards for models already installed.
+7. **No cloud API key required for normal local use.** Hugging Face authentication is optional unless you choose gated/private models or want higher Hub limits.
 
 Approximate GPU memory, as a starting point (each model tile compares its needs with your GPU):
 

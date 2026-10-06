@@ -1,0 +1,289 @@
+"""Qt runtime for Live Voice generation and raw PCM playback."""
+
+import threading
+
+import numpy as np
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink
+
+
+class LiveSpeechThread(QThread):
+    stream_started = Signal(object)
+    frame_ready = Signal(object)
+    session_complete = Signal(object)
+    error_occurred = Signal(str)
+
+    def __init__(self, session, parent=None):
+        super().__init__(parent)
+        self.session = session
+        self._stop = threading.Event()
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        try:
+            self.stream_started.emit({
+                "mode": self.session.delivery_mode,
+                "sample_rate": self.session.sample_rate,
+                "provenance": self.session.provenance,
+            })
+            for frame in self.session.frames(self._stop.is_set):
+                if self._stop.is_set():
+                    break
+                self.frame_ready.emit(frame)
+            self.session_complete.emit(self.session.metrics())
+        except Exception as exc:
+            self.error_occurred.emit(f"{type(exc).__name__}: {exc}")
+
+
+class StreamingPcmConverter:
+    """Stateful mono s16le rate/channel conversion for a continuous stream."""
+
+    def __init__(self, source_rate, target_rate, target_channels):
+        self.source_rate = int(source_rate)
+        self.target_rate = int(target_rate)
+        self.target_channels = int(target_channels)
+        self._buffer = np.zeros(0, dtype=np.float32)
+        self._position = 0.0
+        self._step = self.source_rate / float(self.target_rate)
+
+    def convert(self, pcm, final=False):
+        incoming = np.frombuffer(pcm, dtype="<i2").astype(np.float32) if pcm else np.zeros(0, dtype=np.float32)
+        if self.source_rate == self.target_rate:
+            values = incoming
+        else:
+            if incoming.size:
+                self._buffer = np.concatenate((self._buffer, incoming))
+            limit = len(self._buffer) if final else max(0, len(self._buffer) - 1)
+            if self._position >= limit or not len(self._buffer):
+                values = np.zeros(0, dtype=np.float32)
+            else:
+                positions = np.arange(self._position, limit, self._step, dtype=np.float64)
+                left = np.floor(positions).astype(np.int64)
+                right = np.minimum(left + 1, len(self._buffer) - 1)
+                fraction = positions - left
+                values = self._buffer[left] * (1.0 - fraction) + self._buffer[right] * fraction
+                next_position = float(positions[-1] + self._step)
+                if final:
+                    drop = min(int(next_position), len(self._buffer))
+                else:
+                    drop = min(int(next_position), max(0, len(self._buffer) - 1))
+                self._buffer = self._buffer[drop:]
+                self._position = next_position - drop
+            if final:
+                self._buffer = np.zeros(0, dtype=np.float32)
+                self._position = 0.0
+
+        if not len(values):
+            return b""
+        mono = np.clip(np.rint(values), -32768, 32767).astype("<i2")
+        if self.target_channels == 1:
+            return mono.tobytes()
+        interleaved = np.repeat(mono[:, None], self.target_channels, axis=1)
+        return np.ascontiguousarray(interleaved).tobytes()
+
+
+class LiveAudioOutput(QObject):
+    """Bounded push-mode QAudioSink with a small anti-underrun start buffer."""
+
+    failed = Signal(str)
+    drained = Signal()
+    buffer_changed = Signal(float)
+
+    START_BUFFER_SECONDS = 0.15
+    SINK_BUFFER_SECONDS = 0.50
+    MAX_PENDING_SECONDS = 30.0
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._sink = None
+        self._io = None
+        self._device_key = None
+        self._source_rate = None
+        self._format = None
+        self._converter = None
+        self._pending = bytearray()
+        self._started = False
+        self._input_finished = False
+        self._drained_emitted = False
+        self._timer = QTimer(self)
+        self._timer.setInterval(10)
+        self._timer.timeout.connect(self._tick)
+
+    @staticmethod
+    def device_key(device):
+        try:
+            return bytes(device.id())
+        except Exception:
+            return str(device.description()).encode("utf-8", "replace")
+
+    @staticmethod
+    def _format(rate, channels):
+        fmt = QAudioFormat()
+        fmt.setSampleRate(int(rate))
+        fmt.setChannelCount(int(channels))
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        return fmt
+
+    def _choose_format(self, device, source_rate):
+        preferred = device.preferredFormat()
+        rates = []
+        for rate in (source_rate, 48000, preferred.sampleRate(), 44100):
+            rate = int(rate or 0)
+            if rate > 0 and rate not in rates:
+                rates.append(rate)
+        channels = []
+        for count in (1, preferred.channelCount(), 2):
+            count = int(count or 0)
+            if count in (1, 2) and count not in channels:
+                channels.append(count)
+        for rate in rates:
+            for count in channels:
+                fmt = self._format(rate, count)
+                if device.isFormatSupported(fmt):
+                    return fmt
+        raise RuntimeError(
+            f"{device.description()} does not advertise a compatible mono/stereo Int16 format."
+        )
+
+    def configure(self, device, source_rate):
+        key = self.device_key(device)
+        source_rate = int(source_rate)
+        if (
+            self._sink is not None
+            and key == self._device_key
+            and source_rate == self._source_rate
+        ):
+            self._input_finished = False
+            self._drained_emitted = False
+            return
+
+        self.stop()
+        fmt = self._choose_format(device, source_rate)
+        self._device_key = key
+        self._source_rate = source_rate
+        self._format = fmt
+        self._converter = StreamingPcmConverter(
+            source_rate, fmt.sampleRate(), fmt.channelCount()
+        )
+        self._sink = QAudioSink(device, fmt, self)
+        bytes_per_second = fmt.sampleRate() * fmt.channelCount() * 2
+        self._sink.setBufferSize(max(4096, int(bytes_per_second * self.SINK_BUFFER_SECONDS)))
+        self._pending.clear()
+        self._started = False
+        self._input_finished = False
+        self._drained_emitted = False
+        self._timer.start()
+
+    def _bytes_per_second(self):
+        if self._format is None:
+            return 0
+        return self._format.sampleRate() * self._format.channelCount() * 2
+
+    def _start_sink(self):
+        if self._started or self._sink is None:
+            return
+        self._io = self._sink.start()
+        if self._io is None:
+            raise RuntimeError("Qt could not open the selected audio output device.")
+        self._started = True
+
+    def push(self, pcm):
+        if self._sink is None or self._converter is None:
+            raise RuntimeError("Live audio output is not configured.")
+        converted = self._converter.convert(pcm)
+        if converted:
+            self._pending.extend(converted)
+        bps = self._bytes_per_second()
+        if bps and len(self._pending) > int(bps * self.MAX_PENDING_SECONDS):
+            raise RuntimeError("Live audio buffer exceeded 30 seconds; stopping instead of growing without bound.")
+        if not self._started and (
+            len(self._pending) >= int(bps * self.START_BUFFER_SECONDS)
+        ):
+            self._start_sink()
+        self._flush()
+        self.buffer_changed.emit(self.buffered_ms())
+
+    def finish_input(self):
+        if self._converter is not None:
+            tail = self._converter.convert(b"", final=True)
+            if tail:
+                self._pending.extend(tail)
+        self._input_finished = True
+        if self._pending and not self._started:
+            self._start_sink()
+        self._flush()
+
+    def _flush(self):
+        if not self._started or self._io is None or self._sink is None:
+            return
+        while self._pending:
+            available = max(0, int(self._sink.bytesFree()))
+            if available <= 0:
+                break
+            chunk = bytes(self._pending[:available])
+            written = int(self._io.write(chunk))
+            if written <= 0:
+                break
+            del self._pending[:written]
+
+    def _tick(self):
+        try:
+            self._flush()
+            self.buffer_changed.emit(self.buffered_ms())
+            if (
+                self._input_finished
+                and not self._pending
+                and self._sink is not None
+                and self._started
+                and self._sink.state() == QAudio.State.IdleState
+                and not self._drained_emitted
+            ):
+                self._drained_emitted = True
+                self.drained.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            self.stop()
+
+    def buffered_ms(self):
+        bps = self._bytes_per_second()
+        if not bps:
+            return 0.0
+        queued = len(self._pending)
+        if self._sink is not None and self._started:
+            size = max(0, int(self._sink.bufferSize()))
+            free = max(0, int(self._sink.bytesFree()))
+            queued += max(0, size - free)
+        return 1000.0 * queued / bps
+
+    def route_description(self):
+        if self._format is None:
+            return ""
+        return (
+            f"{self._format.sampleRate()} Hz · "
+            f"{self._format.channelCount()} ch · s16"
+        )
+
+    def stop(self):
+        self._timer.stop()
+        self._pending.clear()
+        self._input_finished = False
+        self._drained_emitted = False
+        self._started = False
+        self._io = None
+        if self._sink is not None:
+            try:
+                self._sink.reset()
+            except Exception:
+                try:
+                    self._sink.stop()
+                except Exception:
+                    pass
+            self._sink.deleteLater()
+        self._sink = None
+        self._format = None
+        self._converter = None
+        self._device_key = None
+        self._source_rate = None
+        self.buffer_changed.emit(0.0)

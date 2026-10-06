@@ -207,6 +207,10 @@ class LiveAudioOutput(QObject):
                 self._converter = StreamingPcmConverter(
                     source_rate, fmt.sampleRate(), fmt.channelCount()
                 )
+            bytes_per_second = fmt.sampleRate() * fmt.channelCount() * 2
+            self._sink.setBufferSize(
+                max(4096, int(bytes_per_second * self._sink_buffer_seconds))
+            )
             self._input_finished = False
             self._drained_emitted = False
             self._last_stats = {}

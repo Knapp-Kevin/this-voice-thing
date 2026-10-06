@@ -117,6 +117,23 @@ class MicrophoneEffectsProcessorTests(unittest.TestCase):
 
 
 class MicrophoneBlockProcessorTests(unittest.TestCase):
+    def test_preserves_partial_stereo_frame_between_blocks(self):
+        processor = MicrophoneBlockProcessor(
+            MicrophoneEffectsConfig(limiter_ceiling_db=0.0)
+        )
+        full = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1).tobytes()
+
+        first = processor.process(full[:3], sample_rate=48000, channels=2)
+        second = processor.process(full[3:], sample_rate=48000, channels=2)
+
+        self.assertIsNone(first)
+        self.assertIsNotNone(second)
+        np.testing.assert_array_equal(
+            np.frombuffer(second.pcm, dtype="<i2"),
+            np.asarray([2000, -2000], dtype="<i2"),
+        )
+        self.assertEqual(processor.metrics()["partial_frame_bytes"], 0)
+
     def test_emits_shared_audio_frame_as_mono(self):
         stereo = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1)
         processor = MicrophoneBlockProcessor(

@@ -5,7 +5,7 @@ import wave
 
 import numpy as np
 
-from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
+from this_voice_thing.core.live_voice import AudioFileSpeechSession, CachedSpeechSession, LiveSpeechSession
 
 
 class NativeModel:
@@ -38,6 +38,37 @@ class BufferedModel:
 class Pronunciations:
     def apply_section(self, text):
         return text.replace("SQL", "sequel"), 1
+
+
+class AudioFileSpeechSessionTests(unittest.TestCase):
+    def test_audio_file_streams_as_mono_pcm(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        path = handle.name
+        handle.close()
+        try:
+            with wave.open(path, "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(22050)
+                # Opposite stereo channels should downmix close to silence.
+                frames = b"".join(
+                    int(1000).to_bytes(2, "little", signed=True)
+                    + int(-1000).to_bytes(2, "little", signed=True)
+                    for _ in range(64)
+                )
+                output.writeframes(frames)
+
+            session = AudioFileSpeechSession(path)
+            chunks = list(session.frames())
+            samples = np.frombuffer(b"".join(frame.pcm for frame in chunks), dtype="<i2")
+
+            self.assertEqual(session.delivery_mode, "audio")
+            self.assertEqual(session.sample_rate, 22050)
+            self.assertGreater(len(samples), 0)
+            self.assertLessEqual(int(np.max(np.abs(samples))), 2)
+            self.assertEqual(session.metrics()["provenance"], "soundboard-audio-file")
+        finally:
+            os.remove(path)
 
 
 class CachedSpeechSessionTests(unittest.TestCase):

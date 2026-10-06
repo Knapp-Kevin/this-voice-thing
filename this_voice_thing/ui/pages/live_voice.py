@@ -372,11 +372,16 @@ class LiveVoicePage:
             self.live_current_label.setText("Finishing playback…")
 
     def live_stop_current(self):
-        if self.live_speech_thread is None:
+        if self.live_speech_thread is None and not self.live_audio_output.is_playing():
             return
         self.live_audio_output.stop()
-        self.live_speech_thread.stop()
-        self.live_status_label.setText("Stopping current…")
+        if self.live_speech_thread is not None:
+            self.live_speech_thread.stop()
+            self.live_status_label.setText("Stopping current…")
+        else:
+            self._set_live_generation_busy(False)
+            self.live_current_label.setText("Stopped.")
+            self.live_status_label.setText("Stopped")
 
     def live_stop_all(self):
         self.live_voice_stop_all_requested = True
@@ -409,8 +414,9 @@ class LiveVoicePage:
 
     def _set_live_generation_busy(self, busy):
         self.live_voice_busy = bool(busy)
-        self.live_stop_current_button.setEnabled(busy)
-        self.live_stop_all_button.setEnabled(busy or bool(self.live_voice_queue))
+        audible = self.live_audio_output.is_playing()
+        self.live_stop_current_button.setEnabled(busy or audible)
+        self.live_stop_all_button.setEnabled(busy or audible or bool(self.live_voice_queue))
         self.live_output_combo.setEnabled(not busy)
         other_busy = getattr(self, "model_is_loading", False) or self.api_busy
         self.model_repo_combo.setEnabled(not busy and not other_busy)
@@ -418,13 +424,20 @@ class LiveVoicePage:
         self.preview_button.setEnabled(not busy and not other_busy and self.model is not None)
 
     def on_live_buffer_changed(self, milliseconds):
-        if self.live_voice_busy and milliseconds > 0:
+        audible = self.live_audio_output.is_playing() or milliseconds > 1.0
+        self.live_stop_current_button.setEnabled(self.live_voice_busy or audible)
+        self.live_stop_all_button.setEnabled(
+            self.live_voice_busy or audible or bool(self.live_voice_queue)
+        )
+        if audible:
             self.live_status_label.setText(
                 f"Speaking · {milliseconds / 1000.0:.2f}s buffered"
             )
 
     def on_live_audio_drained(self):
         if self.live_speech_thread is None and not self.live_voice_queue:
+            self.live_stop_current_button.setEnabled(False)
+            self.live_stop_all_button.setEnabled(False)
             self.live_current_label.setText("Nothing speaking.")
             self.live_status_label.setText("Ready")
 

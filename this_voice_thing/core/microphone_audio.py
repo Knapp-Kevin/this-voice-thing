@@ -96,7 +96,7 @@ class MicrophoneEffectsConfig:
     compressor_enabled: bool = False
     compressor_threshold_db: float = -18.0
     compressor_ratio: float = 3.0
-    limiter_ceiling_db: float = -1.0
+    limiter_ceiling_db: float = 0.0
 
     def normalized(self):
         return MicrophoneEffectsConfig(

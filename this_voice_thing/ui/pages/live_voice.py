@@ -524,7 +524,13 @@ class LiveVoicePage:
         else:
             readiness = "Voice model: load one to speak"
         self.live_model_label.setToolTip(readiness)
-        if self.model is None:
+        mic_mode = (
+            hasattr(self, "live_source_mode_combo")
+            and self.live_source_mode_combo.currentData() == "mic_effects"
+        )
+        if mic_mode:
+            mode = "Mic Effects"
+        elif self.model is None:
             mode = "Unavailable"
         elif getattr(self.model, "native_streaming", False):
             mode = "Native streaming"
@@ -2520,11 +2526,21 @@ class LiveVoicePage:
     def on_live_buffer_changed(self, milliseconds):
         audible = self._refresh_live_stop_buttons() or milliseconds > 1.0
         if audible:
-            self.live_status_label.setText(
-                f"Speaking · {milliseconds / 1000.0:.2f}s buffered"
-            )
+            if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+                self.live_status_label.setText(
+                    f"Mic Effects live · {milliseconds / 1000.0:.2f}s buffered"
+                )
+            else:
+                self.live_status_label.setText(
+                    f"Speaking · {milliseconds / 1000.0:.2f}s buffered"
+                )
 
     def on_live_audio_drained(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            self._refresh_live_stop_buttons()
+            self.live_current_label.setText("Microphone effects active.")
+            self.live_status_label.setText("Mic Effects live")
+            return
         if self.live_speech_thread is None and not self.live_voice_queue:
             if self.live_audio_output.is_playing() or self.live_monitor_output.is_playing():
                 self._refresh_live_stop_buttons()

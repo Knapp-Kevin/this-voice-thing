@@ -82,7 +82,12 @@
       "language_id": "en",
       "license": "apache-2.0",
       "download_bytes": 4960731866,
-      "mode": "clone"
+      "mode": "clone",
+      "live_audio": {
+        "mode": "native",
+        "response_format": "pcm",
+        "sample_rate": 48000
+      }
     },
     {
       "repo_id": "openbmb/VoxCPM2",
@@ -95,7 +100,12 @@
       "language_id": "en",
       "license": "apache-2.0",
       "download_bytes": 4960731866,
-      "mode": "design"
+      "mode": "design",
+      "live_audio": {
+        "mode": "native",
+        "response_format": "pcm",
+        "sample_rate": 48000
+      }
     },
     {
       "repo_id": "k2-fsa/OmniVoice",

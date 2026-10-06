@@ -105,6 +105,18 @@ class SoundboardStoreTests(unittest.TestCase):
         self.assertEqual(reloaded.active_board_id, first.id)
         self.assertEqual(reloaded.get_board(second.id).name, "Calls")
 
+    def test_board_voice_and_route_defaults_persist(self):
+        board = self.store.active_board()
+        board.default_voice_id = "voice-123"
+        board.route_profile = "discord"
+        self.store.save()
+
+        reloaded = SoundboardStore(self.temp.name)
+        restored = reloaded.active_board()
+
+        self.assertEqual(restored.default_voice_id, "voice-123")
+        self.assertEqual(restored.route_profile, "discord")
+
     def test_duplicate_board_names_are_made_unique(self):
         first = self.store.create_board("Gaming")
         second = self.store.create_board("Gaming")

@@ -148,6 +148,9 @@ class ModelLoading:
             self.update_engine_controls()
 
     def load_model(self, selected_entry=None):
+        if getattr(self, "live_voice_busy", False):
+            QMessageBox.information(self, "Live Voice", "Stop Live Voice before switching models.")
+            return
         if not CHATTERBOX_AVAILABLE:
             QMessageBox.critical(
                 self, "Error", "ChatterboxTTS library not installed.")

@@ -74,9 +74,11 @@ python scripts\rvc_feasibility.py convert ^
 
 The pinned upstream realtime implementation is useful architectural evidence but is not copied into This Voice Thing's routing layer.
 
-At this revision it uses:
+At this revision the realtime GUI code falls back to **250 ms** blocks when no saved configuration is available, while the checked-in `configs/config.json` currently specifies **130 ms**. Treat block size as a benchmark parameter, not a universal default.
 
-- default 250 ms audio blocks;
+It also uses:
+
+- configurable audio blocks;
 - crossfade + SOLA alignment between converted blocks;
 - HuBERT features;
 - RMVPE, FCPE, or PM pitch extraction;

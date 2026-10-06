@@ -45,6 +45,7 @@ class LiveVoicePage:
         )
         self.live_hotkeys = GlobalHotkeyManager(self)
         self.live_external_armed = False
+        self.live_board_defaults_applied = False
 
         self.live_audio_output = LiveAudioOutput(self)
         self.live_audio_output.failed.connect(self.on_live_audio_error)
@@ -206,6 +207,25 @@ class LiveVoicePage:
         board_picker_row.addWidget(delete_board)
         board_layout.addLayout(board_picker_row)
 
+        defaults_row = QHBoxLayout()
+        defaults_row.addWidget(QLabel("Board defaults"))
+        self.soundboard_defaults_label = QLabel("Voice: none · Route: none")
+        self.soundboard_defaults_label.setObjectName("Muted")
+        defaults_row.addWidget(self.soundboard_defaults_label, 1)
+        save_voice_default = QPushButton("Use current voice")
+        save_voice_default.clicked.connect(self.set_soundboard_default_voice)
+        defaults_row.addWidget(save_voice_default)
+        clear_voice_default = self._link(QPushButton("Clear voice"))
+        clear_voice_default.clicked.connect(self.clear_soundboard_default_voice)
+        defaults_row.addWidget(clear_voice_default)
+        save_route_default = QPushButton("Use current route")
+        save_route_default.clicked.connect(self.set_soundboard_default_route)
+        defaults_row.addWidget(save_route_default)
+        clear_route_default = self._link(QPushButton("Clear route"))
+        clear_route_default.clicked.connect(self.clear_soundboard_default_route)
+        defaults_row.addWidget(clear_route_default)
+        board_layout.addLayout(defaults_row)
+
         self.soundboard_list = QListWidget()
         self.soundboard_list.setMinimumHeight(130)
         self.soundboard_list.itemDoubleClicked.connect(lambda _item: self.trigger_selected_soundboard_pad())
@@ -268,6 +288,7 @@ class LiveVoicePage:
         self.refresh_live_voice_summary()
         self.refresh_soundboard_boards()
         self.refresh_soundboard()
+        self.refresh_soundboard_board_defaults()
         self.refresh_live_global_hotkeys()
         self.update_live_route_state()
 
@@ -974,6 +995,126 @@ class LiveVoicePage:
         self.soundboard_board_combo.setCurrentIndex(max(0, index))
         self.soundboard_board_combo.blockSignals(False)
 
+    def refresh_soundboard_board_defaults(self):
+        if not hasattr(self, "soundboard_defaults_label"):
+            return
+        board = self.soundboard_store.active_board()
+        if board is None:
+            self.soundboard_defaults_label.setText("Voice: none · Route: none")
+            return
+
+        voice_name = "none"
+        if board.default_voice_id:
+            voice = self.voice_library.get(board.default_voice_id)
+            if voice is not None:
+                voice_name = voice.name
+            else:
+                board.default_voice_id = ""
+                self.soundboard_store.save()
+                voice_name = "missing voice cleared"
+
+        route_name = "none"
+        if board.route_profile:
+            profile = self.live_route_store.get(board.route_profile)
+            if profile is not None:
+                route_name = profile.name
+            else:
+                board.route_profile = ""
+                self.soundboard_store.save()
+                route_name = "missing route cleared"
+
+        self.soundboard_defaults_label.setText(
+            f"Voice: {voice_name} · Route: {route_name}"
+        )
+
+    def set_soundboard_default_voice(self):
+        board = self.soundboard_store.active_board()
+        voice = self.voice_library.get(self.active_voice_id) if self.active_voice_id else None
+        if board is None:
+            return
+        if voice is None:
+            QMessageBox.information(
+                self,
+                "Board default voice",
+                "Pick one of your saved voices first. Built-in transient selections are not stored as board defaults.",
+            )
+            return
+        board.default_voice_id = voice.id
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+        self.soundboard_status_label.setText(
+            f"{board.name} will prefer {voice.name} when the board is selected."
+        )
+
+    def clear_soundboard_default_voice(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        board.default_voice_id = ""
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+
+    def set_soundboard_default_route(self):
+        board = self.soundboard_store.active_board()
+        profile = self.active_live_route_profile()
+        if board is None or profile is None:
+            return
+        board.route_profile = profile.id
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+        self.soundboard_status_label.setText(
+            f"{board.name} will prefer the {profile.name} route. External routes still require arming."
+        )
+
+    def clear_soundboard_default_route(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        board.route_profile = ""
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+
+    def soundboard_defaults_can_apply(self):
+        return not (
+            self.live_voice_busy
+            or self.live_voice_queue
+            or self.live_audio_output.is_playing()
+            or self.live_monitor_output.is_playing()
+            or getattr(self, "model_is_loading", False)
+            or self.is_generating
+            or self.api_busy
+        )
+
+    def apply_soundboard_board_defaults(self, board):
+        if board is None:
+            return
+        if not self.soundboard_defaults_can_apply():
+            self.soundboard_status_label.setText(
+                f"{board.name} selected. Its defaults were not applied while Live Voice was busy."
+            )
+            return
+
+        if board.route_profile:
+            index = self.live_route_profile_combo.findData(board.route_profile)
+            if index >= 0:
+                self.live_external_armed = False
+                if self.live_route_profile_combo.currentIndex() != index:
+                    self.live_route_profile_combo.setCurrentIndex(index)
+                else:
+                    self.live_route_store.select(board.route_profile)
+                    self.refresh_live_audio_devices()
+                    self.update_live_route_state()
+
+        if board.default_voice_id:
+            voice = self.voice_library.get(board.default_voice_id)
+            if voice is None:
+                board.default_voice_id = ""
+                self.soundboard_store.save()
+            elif self.active_voice_id != voice.id:
+                self.use_voice(voice)
+
+        self.refresh_soundboard_board_defaults()
+
     def on_soundboard_board_changed(self, _index):
         board_id = self.soundboard_board_combo.currentData()
         if not board_id:
@@ -983,9 +1124,13 @@ class LiveVoicePage:
             return
         self.refresh_soundboard()
         self.refresh_live_global_hotkeys()
-        self.soundboard_status_label.setText(
-            f"{board.name}: {len(board.pads)} pad(s)"
-        )
+        can_apply = self.soundboard_defaults_can_apply()
+        self.apply_soundboard_board_defaults(board)
+        self.live_board_defaults_applied = can_apply
+        if can_apply:
+            self.soundboard_status_label.setText(
+                f"{board.name}: {len(board.pads)} pad(s)"
+            )
 
     def create_soundboard_board(self):
         name, accepted = QInputDialog.getText(
@@ -997,6 +1142,7 @@ class LiveVoicePage:
         self.refresh_soundboard_boards(select_id=board.id)
         self.refresh_soundboard()
         self.refresh_live_global_hotkeys()
+        self.refresh_soundboard_board_defaults()
         self.soundboard_status_label.setText(f"Created {board.name}")
 
     def rename_soundboard_board(self):
@@ -1010,6 +1156,7 @@ class LiveVoicePage:
             return
         board = self.soundboard_store.rename_board(board.id, name.strip())
         self.refresh_soundboard_boards(select_id=board.id)
+        self.refresh_soundboard_board_defaults()
         self.soundboard_status_label.setText(f"Renamed board to {board.name}")
 
     def delete_soundboard_board(self):
@@ -1041,6 +1188,7 @@ class LiveVoicePage:
         self.refresh_soundboard_boards()
         self.refresh_soundboard()
         self.refresh_live_global_hotkeys()
+        self.refresh_soundboard_board_defaults()
         if removed is not None:
             self.soundboard_status_label.setText(f"Deleted board {removed.name}")
 

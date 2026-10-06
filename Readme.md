@@ -264,6 +264,10 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
 - **Multiple boards:** create, rename, switch and delete soundboard boards without mixing unrelated phrase sets together.
 - **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, and **Ctrl+Shift+Enter** repeats the last line. These are not system-wide hotkeys.
+- **Bounded queue:** Live Voice caps outstanding work at 25 items and about 10 minutes of estimated speech so repeated pad presses or automation cannot grow memory without bound.
+- **Session privacy controls:** Live Speak history is session-only, capped, and can be cleared immediately. **Clear cache** removes all locally cached soundboard WAVs while keeping the pads themselves.
+- **Visible provenance:** the Live Voice header shows the selected voice origin and the current audio provenance/watermark policy. Cached pads preserve the provenance of the audio they were originally built from instead of merely saying “cached.”
+- **Monitoring feedback warning:** when an external route is armed and the monitor device does not look like headphones/headset/earbuds, Live Voice warns that a physical microphone may hear the monitoring output.
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.

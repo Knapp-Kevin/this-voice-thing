@@ -168,7 +168,7 @@ class LiveSpeechSession:
 class CachedSpeechSession:
     """Read a cached mono s16 WAV through the same frame interface as live TTS."""
 
-    def __init__(self, path, label="Cached soundboard"):
+    def __init__(self, path, label="Cached soundboard", provenance="soundboard-cache-unknown"):
         self.path = path
         self.label = label
         with wave.open(path, "rb") as handle:
@@ -176,7 +176,7 @@ class CachedSpeechSession:
                 raise ValueError("Cached soundboard audio must be mono 16-bit PCM WAV.")
             self.sample_rate = int(handle.getframerate())
         self.delivery_mode = "cached"
-        self.provenance = "soundboard-cache"
+        self.provenance = str(provenance or "soundboard-cache-unknown")
         self._started_at = None
         self._first_audio_at = None
         self._ended_at = None

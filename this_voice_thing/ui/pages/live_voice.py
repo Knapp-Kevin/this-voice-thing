@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from this_voice_thing.core import live_routes, soundboard, voice_library
 from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
 from this_voice_thing.engines import vibevoice as vibevoice_engine
+from this_voice_thing.ui.global_hotkeys import GlobalHotkeyManager, HotkeyError, normalize_hotkey
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
 from this_voice_thing.ui import theme as ui_theme
 
@@ -39,6 +40,7 @@ class LiveVoicePage:
         self.live_route_store = live_routes.RouteProfileStore(
             self.app_settings.setdefault("live_voice", {})
         )
+        self.live_hotkeys = GlobalHotkeyManager(self)
         self.live_external_armed = False
 
         self.live_audio_output = LiveAudioOutput(self)
@@ -198,11 +200,36 @@ class LiveVoicePage:
         delete_pad = self._link(QPushButton("Delete"))
         delete_pad.clicked.connect(self.delete_selected_soundboard_pad)
         board_actions.addWidget(delete_pad)
+        set_hotkey = QPushButton("Set hotkey…")
+        set_hotkey.clicked.connect(self.set_selected_soundboard_hotkey)
+        board_actions.addWidget(set_hotkey)
+        clear_hotkey = self._link(QPushButton("Clear hotkey"))
+        clear_hotkey.clicked.connect(self.clear_selected_soundboard_hotkey)
+        board_actions.addWidget(clear_hotkey)
         board_actions.addStretch(1)
         self.soundboard_status_label = QLabel("Static TTS pads cache locally after their first successful generation.")
         self.soundboard_status_label.setObjectName("Muted")
         board_actions.addWidget(self.soundboard_status_label)
         board_layout.addLayout(board_actions)
+
+        hotkey_row = QHBoxLayout()
+        hotkey_row.addWidget(QLabel("Global Stop All"))
+        self.live_stop_hotkey_label = QLabel(
+            self.app_settings.get("live_voice", {}).get("stop_hotkey", "") or "Not set"
+        )
+        self.live_stop_hotkey_label.setObjectName("Muted")
+        hotkey_row.addWidget(self.live_stop_hotkey_label)
+        set_stop_hotkey = QPushButton("Set…")
+        set_stop_hotkey.clicked.connect(self.set_live_stop_hotkey)
+        hotkey_row.addWidget(set_stop_hotkey)
+        clear_stop_hotkey = self._link(QPushButton("Clear"))
+        clear_stop_hotkey.clicked.connect(self.clear_live_stop_hotkey)
+        hotkey_row.addWidget(clear_stop_hotkey)
+        hotkey_row.addStretch(1)
+        self.live_hotkey_status_label = QLabel("")
+        self.live_hotkey_status_label.setObjectName("Muted")
+        hotkey_row.addWidget(self.live_hotkey_status_label)
+        board_layout.addLayout(hotkey_row)
         layout.addWidget(board_card, 1)
 
         QShortcut(QKeySequence("Ctrl+Return"), page, activated=self.live_submit)
@@ -217,6 +244,7 @@ class LiveVoicePage:
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
         self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
         self.update_live_route_state()
 
     def refresh_live_voice_summary(self):
@@ -895,10 +923,17 @@ class LiveVoicePage:
             and abs(float(self.top_p) - pad.top_p) < 1e-9
         )
 
-    def _queue_soundboard_pad(self, pad, force_generate=False):
+    def _soundboard_problem(self, title, message, interactive=True):
+        if interactive:
+            QMessageBox.information(self, title, message)
+        else:
+            QApplication.beep()
+            self.set_status_message(f"Status: {title}: {message}")
+
+    def _queue_soundboard_pad(self, pad, force_generate=False, interactive=True):
         route_problem = self.live_route_problem()
         if route_problem:
-            QMessageBox.information(self, "Soundboard route", route_problem)
+            self._soundboard_problem("Soundboard route", route_problem, interactive)
             return
         expected = self._soundboard_cache_key(pad)
         cached = (
@@ -918,18 +953,18 @@ class LiveVoicePage:
             if self.live_speech_thread is None and (
                 getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy
             ):
-                QMessageBox.information(
-                    self,
+                self._soundboard_problem(
                     "Soundboard",
                     "This pad needs to be regenerated, but the model is busy with another task.",
+                    interactive,
                 )
                 return
             if not self._current_context_matches_pad(pad):
-                QMessageBox.information(
-                    self,
+                self._soundboard_problem(
                     "Soundboard cache needs rebuilding",
                     f"{pad.label} no longer has a valid cache and its saved voice/model is not active. "
                     "Select that voice/model again, then trigger the pad to rebuild it.",
+                    interactive,
                 )
                 return
             self.live_voice_queue.append({
@@ -950,6 +985,7 @@ class LiveVoicePage:
             return
         self.soundboard_store.remove_pad(pad.id)
         self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
         self.soundboard_status_label.setText(f"Deleted {pad.label}")
 
     def refresh_soundboard(self, select_id=None):
@@ -963,12 +999,132 @@ class LiveVoicePage:
             expected = self._soundboard_cache_key(pad)
             cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
             suffix = " · cached" if cached else " · rebuild needed"
+            if pad.hotkey:
+                suffix += f" · {pad.hotkey}"
             self.soundboard_list.addItem(f"{pad.label}{suffix}")
             item = self.soundboard_list.item(self.soundboard_list.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, pad.id)
             item.setToolTip(pad.text)
             if select_id == pad.id:
                 self.soundboard_list.setCurrentItem(item)
+
+    def _assigned_live_hotkeys(self, exclude_pad_id=None, include_stop=True):
+        assigned = {}
+        if include_stop:
+            stop = str(self.app_settings.get("live_voice", {}).get("stop_hotkey", "") or "").strip()
+            if stop:
+                assigned[stop] = "Global Stop All"
+        for board in self.soundboard_store.boards:
+            for pad in board.pads:
+                if pad.id == exclude_pad_id or not pad.hotkey:
+                    continue
+                assigned[pad.hotkey] = f"Soundboard: {pad.label}"
+        return assigned
+
+    def _prompt_live_hotkey(self, title, current=""):
+        value, accepted = QInputDialog.getText(
+            self,
+            title,
+            "Shortcut (requires Ctrl, Alt or Shift):",
+            text=current or "Ctrl+Alt+1",
+        )
+        if not accepted:
+            return ""
+        try:
+            return normalize_hotkey(value)
+        except HotkeyError as exc:
+            QMessageBox.warning(self, title, str(exc))
+            return ""
+
+    def set_selected_soundboard_hotkey(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            QMessageBox.information(self, "Soundboard hotkey", "Select a soundboard pad first.")
+            return
+        hotkey = self._prompt_live_hotkey("Set soundboard hotkey", pad.hotkey)
+        if not hotkey:
+            return
+        owner = self._assigned_live_hotkeys(exclude_pad_id=pad.id).get(hotkey)
+        if owner:
+            QMessageBox.warning(self, "Soundboard hotkey", f"{hotkey} is already assigned to {owner}.")
+            return
+        pad.hotkey = hotkey
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+        self.refresh_live_global_hotkeys()
+
+    def clear_selected_soundboard_hotkey(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None or not pad.hotkey:
+            return
+        pad.hotkey = ""
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+        self.refresh_live_global_hotkeys()
+
+    def set_live_stop_hotkey(self):
+        settings = self.app_settings.setdefault("live_voice", {})
+        hotkey = self._prompt_live_hotkey("Set Global Stop All hotkey", settings.get("stop_hotkey", ""))
+        if not hotkey:
+            return
+        owner = self._assigned_live_hotkeys(include_stop=False).get(hotkey)
+        if owner:
+            QMessageBox.warning(self, "Global Stop All hotkey", f"{hotkey} is already assigned to {owner}.")
+            return
+        settings["stop_hotkey"] = hotkey
+        self.live_stop_hotkey_label.setText(hotkey)
+        self.save_app_settings()
+        self.refresh_live_global_hotkeys()
+
+    def clear_live_stop_hotkey(self):
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["stop_hotkey"] = ""
+        self.live_stop_hotkey_label.setText("Not set")
+        self.save_app_settings()
+        self.refresh_live_global_hotkeys()
+
+    def refresh_live_global_hotkeys(self):
+        if not hasattr(self, "live_hotkeys"):
+            return
+        self.live_hotkeys.clear()
+        errors = []
+        settings = self.app_settings.setdefault("live_voice", {})
+        stop = str(settings.get("stop_hotkey", "") or "").strip()
+        if stop:
+            error = self.live_hotkeys.register("stop_all", stop)
+            if error:
+                errors.append(f"{stop}: {error}")
+        for board in self.soundboard_store.boards:
+            for pad in board.pads:
+                if not pad.hotkey:
+                    continue
+                error = self.live_hotkeys.register(f"pad:{pad.id}", pad.hotkey)
+                if error:
+                    errors.append(f"{pad.label} ({pad.hotkey}): {error}")
+
+        if not self.live_hotkeys.supported:
+            self.live_hotkey_status_label.setText("Global hotkeys: Windows only")
+            self.live_hotkey_status_label.setToolTip("This first implementation uses the Windows RegisterHotKey API.")
+        elif errors:
+            self.live_hotkey_status_label.setText(
+                f"Global hotkeys: {self.live_hotkeys.registered_count()} active · {len(errors)} conflict(s)"
+            )
+            self.live_hotkey_status_label.setToolTip("\n".join(errors))
+        else:
+            count = self.live_hotkeys.registered_count()
+            self.live_hotkey_status_label.setText(
+                f"Global hotkeys: {count} active" if count else "Global hotkeys: none"
+            )
+            self.live_hotkey_status_label.setToolTip("")
+
+    def handle_live_global_hotkey(self, action_id):
+        if action_id == "stop_all":
+            self.live_stop_all()
+            return
+        if str(action_id).startswith("pad:"):
+            pad = self.soundboard_store.get_pad(str(action_id).split(":", 1)[1])
+            if pad is not None:
+                self._queue_soundboard_pad(pad, interactive=False)
 
     def _refresh_live_queue(self):
         self.live_queue_list.clear()

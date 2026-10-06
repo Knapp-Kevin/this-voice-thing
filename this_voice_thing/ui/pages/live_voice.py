@@ -1,5 +1,7 @@
 """Live Voice page: type text and send generated PCM directly to an audio device."""
 
+import json
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -38,6 +40,7 @@ class LiveVoicePage:
         self.live_voice_current = None
         self.live_voice_stop_all_requested = False
         self.live_voice_last_error = ""
+        self.live_last_generation_metrics = {}
         self.live_audio_devices = []
         self.live_audio_inputs = []
         self.soundboard_store = soundboard.SoundboardStore(self.script_dir)
@@ -169,6 +172,9 @@ class LiveVoicePage:
         self.live_stop_all_button.clicked.connect(self.live_stop_all)
         self.live_stop_all_button.setEnabled(False)
         controls.addWidget(self.live_stop_all_button)
+        diagnostics = self._link(QPushButton("Copy diagnostics"))
+        diagnostics.clicked.connect(self.copy_live_diagnostics)
+        controls.addWidget(diagnostics)
         controls.addStretch(1)
         self.live_status_label = QLabel("Ready")
         self.live_status_label.setObjectName("Muted")
@@ -845,6 +851,7 @@ class LiveVoicePage:
                 self.on_live_monitor_error(str(exc))
 
     def on_live_session_complete(self, metrics):
+        self.live_last_generation_metrics = dict(metrics)
         if not metrics.get("cancelled") and self.live_voice_current:
             self.live_voice_history.append({
                 "text": self.live_voice_current["text"],
@@ -926,6 +933,57 @@ class LiveVoicePage:
             self._set_live_generation_busy(False)
             self.live_status_label.setText("Stopped")
             self.live_current_label.setText("Nothing speaking.")
+
+    def copy_live_diagnostics(self):
+        profile = self.active_live_route_profile()
+        voice = self.voice_library.get(self.active_voice_id) if self.active_voice_id else None
+        loaded = self.loaded_entry() if self.model is not None else None
+        primary = self.current_live_audio_device()
+        monitor = self.current_live_monitor_device()
+        _count, outstanding_seconds = self._live_outstanding_items()
+        payload = {
+            "model": (
+                {
+                    "label": loaded.get("label"),
+                    "repo_id": loaded.get("repo_id"),
+                    "backend": loaded.get("backend"),
+                    "mode": loaded.get("mode"),
+                }
+                if loaded is not None
+                else None
+            ),
+            "voice": (
+                {
+                    "name": voice.name,
+                    "kind": voice.kind,
+                    "origin": voice.origin or "",
+                }
+                if voice is not None
+                else {"name": self.live_voice_name_label.text(), "kind": "", "origin": ""}
+            ),
+            "delivery": {
+                "mode_label": self.live_mode_label.text(),
+                "provenance_label": self.live_provenance_label.text(),
+                "generation": dict(self.live_last_generation_metrics),
+            },
+            "route": {
+                "profile_id": profile.id,
+                "profile_name": profile.name,
+                "external": bool(profile.external),
+                "armed": bool(self.live_external_armed) if profile.external else False,
+                "primary_device": primary.description() if primary is not None else None,
+                "monitor_enabled": bool(self.live_monitor_checkbox.isChecked()),
+                "monitor_device": monitor.description() if monitor is not None else None,
+            },
+            "primary_sink": self.live_audio_output.last_stats(),
+            "monitor_sink": self.live_monitor_output.last_stats(),
+            "queue": {
+                "pending_items": len(self.live_voice_queue),
+                "estimated_outstanding_seconds": round(outstanding_seconds, 2),
+            },
+        }
+        QApplication.clipboard().setText(json.dumps(payload, indent=2, ensure_ascii=False))
+        self.live_status_label.setText("Live Voice diagnostics copied.")
 
     def live_clear_queue(self):
         self.live_voice_queue.clear()

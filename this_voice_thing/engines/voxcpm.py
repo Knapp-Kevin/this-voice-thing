@@ -139,12 +139,18 @@ class VoxCPMModel:
             raise RuntimeError("Native PCM streaming is available only for VoxCPM2.")
         request = self._generation_request(text, audio_prompt_path, cmd="generate_stream")
         self.last_stream_metrics = {}
-        for event in self.worker.request_stream(**request):
-            kind = event.get("event")
-            if kind == "audio":
-                yield base64.b64decode(event["data"])
-            elif kind == "done":
-                self.last_stream_metrics = dict(event)
+        events = self.worker.request_stream(**request)
+        try:
+            for event in events:
+                kind = event.get("event")
+                if kind == "audio":
+                    yield base64.b64decode(event["data"])
+                elif kind == "done":
+                    self.last_stream_metrics = dict(event)
+        finally:
+            close = getattr(events, "close", None)
+            if close is not None:
+                close()
 
     def close(self):
         self.worker.close()

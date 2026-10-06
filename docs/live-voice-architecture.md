@@ -4,6 +4,8 @@ Status: proposed product architecture
 Scope: desktop live speech, soundboard, audio routing, and conferencing/chat integration  
 Primary platform: Windows first, with abstractions that do not unnecessarily prevent macOS/Linux support later
 
+Tracking: umbrella issue #15. Current streaming prerequisite: issue #3 and PRs #2/#4/#5.
+
 ## 1. Product intent
 
 This Voice Thing should treat live speech as a first-class product capability rather than an API-only feature.

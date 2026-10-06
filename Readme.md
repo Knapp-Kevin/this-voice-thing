@@ -283,6 +283,8 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Multiple boards:** create, rename, switch and delete soundboard boards without mixing unrelated phrase sets together.
 - **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, and **Ctrl+Shift+Enter** repeats the last line. These are not system-wide hotkeys.
 - **Bounded queue:** Live Voice caps outstanding work at 25 items and about 10 minutes of estimated speech so repeated pad presses or automation cannot grow memory without bound.
+- **Editable queue:** select a queued line to remove it or move it up/down before playback. **Delete** removes the selected queued item and **Alt+Up / Alt+Down** reorder it while Live Voice has focus.
+- The active model label exposes a plain-language readiness tooltip: getting ready, ready, or load one to speak.
 - **Session privacy controls:** Live Speak history is session-only, capped, and can be cleared immediately. **Clear cache** removes all locally cached soundboard WAVs while keeping the pads themselves.
 - **Visible provenance:** the Live Voice header shows the selected voice origin and the current audio provenance/watermark policy. Cached pads preserve the provenance of the audio they were originally built from instead of merely saying “cached.”
 - **Copy diagnostics:** copies a privacy-conscious JSON snapshot with model/voice type, TTFA/RTF, route state, source/target sample rates, sink-start latency, bytes written, underruns and queue pressure. Spoken text is intentionally omitted.

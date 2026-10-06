@@ -849,6 +849,7 @@ class LiveVoicePage:
             return
         self.live_audio_devices = list(self.media_devices.audioOutputs())
         self.live_audio_inputs = list(self.media_devices.audioInputs())
+        self.refresh_live_microphone_devices()
         profile = self.active_live_route_profile()
 
         missing_primary = self._fill_live_device_combo(
@@ -1999,6 +2000,10 @@ class LiveVoicePage:
             or self.live_voice_queue
             or self.live_audio_output.is_playing()
             or self.live_monitor_output.is_playing()
+            or (
+                hasattr(self, "live_mic_input")
+                and self.live_mic_input.is_active()
+            )
         )
 
     def _enqueue_soundboard_item(self, item, pad, interactive=True):

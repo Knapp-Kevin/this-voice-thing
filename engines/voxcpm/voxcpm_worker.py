@@ -50,13 +50,18 @@ def main():
         state.update(model=None, model_id=None)
         if cuda:
             torch.cuda.empty_cache()
+        # Use the local copy when it's there so loading works offline.
         try:
             source = snapshot_download(model_id, local_files_only=True)
         except Exception:
             source = snapshot_download(model_id)
+        # The optional denoiser downloads a separate ModelScope model; it isn't needed
+        # for clean reference clips. optimize (torch.compile) needs Triton, which Windows
+        # lacks: it gave no speed-up on an RTX 5070 Ti and added ~9 s to loading.
         model = VoxCPM.from_pretrained(source, load_denoiser=False, optimize=False)
         state.update(model=model, model_id=model_id,
                      v2=type(model.tts_model).__name__ == "VoxCPM2Model")
+        # The first generation pays a one-time GPU warm-up (~15 s); do it while loading.
         model.tts_model.generate(target_text="Hello, this is a warm-up sentence.", max_len=10)
 
     def generation_kwargs(req):

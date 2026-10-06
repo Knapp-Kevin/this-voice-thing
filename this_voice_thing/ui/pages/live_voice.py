@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -13,7 +14,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 
-from this_voice_thing.core import soundboard, voice_library
+from this_voice_thing.core import live_routes, soundboard, voice_library
 from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
 from this_voice_thing.engines import vibevoice as vibevoice_engine
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
@@ -33,11 +34,21 @@ class LiveVoicePage:
         self.live_voice_last_error = ""
         self.live_audio_devices = []
         self.soundboard_store = soundboard.SoundboardStore(self.script_dir)
+        self.live_route_store = live_routes.RouteProfileStore(
+            self.app_settings.setdefault("live_voice", {})
+        )
+        self.live_external_armed = False
 
         self.live_audio_output = LiveAudioOutput(self)
         self.live_audio_output.failed.connect(self.on_live_audio_error)
         self.live_audio_output.drained.connect(self.on_live_audio_drained)
         self.live_audio_output.buffer_changed.connect(self.on_live_buffer_changed)
+        self.live_monitor_output = LiveAudioOutput(self)
+        self.live_monitor_output.failed.connect(self.on_live_monitor_error)
+        self.live_monitor_output.drained.connect(self.on_live_audio_drained)
+        self.live_monitor_output.buffer_changed.connect(
+            lambda _milliseconds: self._refresh_live_stop_buttons()
+        )
 
         page, layout = self._make_page(
             "Live Voice",
@@ -66,6 +77,26 @@ class LiveVoicePage:
         voice_row.addWidget(self.live_mode_label)
         route_layout.addLayout(voice_row)
 
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("Route"))
+        self.live_route_profile_combo = QComboBox()
+        for profile in self.live_route_store.profiles:
+            self.live_route_profile_combo.addItem(profile.name, profile.id)
+        profile_index = self.live_route_profile_combo.findData(self.live_route_store.active_id)
+        self.live_route_profile_combo.setCurrentIndex(max(0, profile_index))
+        self.live_route_profile_combo.currentIndexChanged.connect(self.on_live_route_profile_changed)
+        profile_row.addWidget(self.live_route_profile_combo, 1)
+        self.live_arm_button = QPushButton("Arm external route")
+        self.live_arm_button.clicked.connect(self.toggle_live_external_arm)
+        profile_row.addWidget(self.live_arm_button)
+        self.live_route_test_button = QPushButton("Test route")
+        self.live_route_test_button.clicked.connect(self.live_test_route)
+        profile_row.addWidget(self.live_route_test_button)
+        self.live_route_state = QLabel("LOCAL ONLY")
+        self.live_route_state.setObjectName("Muted")
+        profile_row.addWidget(self.live_route_state)
+        route_layout.addLayout(profile_row)
+
         output_row = QHBoxLayout()
         output_row.addWidget(QLabel("Send voice to"))
         self.live_output_combo = QComboBox()
@@ -75,10 +106,20 @@ class LiveVoicePage:
         refresh = self._link(QPushButton("Refresh devices"))
         refresh.clicked.connect(self.refresh_live_audio_devices)
         output_row.addWidget(refresh)
-        self.live_route_state = QLabel("LOCAL OUTPUT")
-        self.live_route_state.setObjectName("Muted")
-        output_row.addWidget(self.live_route_state)
         route_layout.addLayout(output_row)
+
+        monitor_row = QHBoxLayout()
+        self.live_monitor_checkbox = QCheckBox("Also let me hear it through")
+        self.live_monitor_checkbox.toggled.connect(self.on_live_monitor_toggled)
+        monitor_row.addWidget(self.live_monitor_checkbox)
+        self.live_monitor_combo = QComboBox()
+        self.live_monitor_combo.setMinimumWidth(320)
+        self.live_monitor_combo.currentIndexChanged.connect(self.on_live_monitor_changed)
+        monitor_row.addWidget(self.live_monitor_combo, 1)
+        self.live_monitor_status = QLabel("")
+        self.live_monitor_status.setObjectName("Muted")
+        monitor_row.addWidget(self.live_monitor_status)
+        route_layout.addLayout(monitor_row)
         layout.addWidget(route_card)
 
         speak_card, speak_layout = self._make_card("Live Speak")
@@ -159,6 +200,7 @@ class LiveVoicePage:
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
         self.refresh_soundboard()
+        self.update_live_route_state()
 
     def refresh_live_voice_summary(self):
         if not hasattr(self, "live_voice_name_label"):
@@ -187,50 +229,82 @@ class LiveVoicePage:
     def _device_id_hex(device):
         return LiveAudioOutput.device_key(device).hex()
 
-    def refresh_live_audio_devices(self):
-        if not hasattr(self, "live_output_combo"):
-            return
-        saved = self.app_settings.get("live_voice", {}).get("output_device_id", "")
-        current = self.live_output_combo.currentData()
-        if current is not None and 0 <= int(current) < len(self.live_audio_devices):
-            saved = self._device_id_hex(self.live_audio_devices[int(current)])
+    def active_live_route_profile(self):
+        return self.live_route_store.active()
 
-        self.live_audio_devices = list(self.media_devices.audioOutputs())
-        self.live_output_combo.blockSignals(True)
-        self.live_output_combo.clear()
+    def _device_index_for_id(self, device_id):
+        if not device_id:
+            return -1
+        for index, device in enumerate(self.live_audio_devices):
+            if self._device_id_hex(device) == device_id:
+                return index
+        return -1
 
-        chosen = -1
-        if saved:
-            for index, device in enumerate(self.live_audio_devices):
-                if self._device_id_hex(device) == saved:
-                    chosen = index
-                    break
+    def _fill_live_device_combo(
+        self, combo, saved_id, saved_name, *, allow_default=False, prompt="Choose an output device…"
+    ):
+        combo.blockSignals(True)
+        combo.clear()
+        chosen = self._device_index_for_id(saved_id)
+        missing_saved = bool(saved_id) and chosen < 0
 
-        missing_saved_device = bool(saved) and chosen < 0
-        if missing_saved_device:
-            saved_name = self.app_settings.get("live_voice", {}).get("output_device_name", "saved output")
-            self.live_output_combo.addItem(f"Unavailable: {saved_name} — choose another output", None)
+        if missing_saved:
+            combo.addItem(f"Unavailable: {saved_name or 'saved output'} — choose another output", None)
+        elif not saved_id and not allow_default:
+            combo.addItem(prompt, None)
 
         for index, device in enumerate(self.live_audio_devices):
-            self.live_output_combo.addItem(device.description(), index)
+            label = device.description()
+            if live_routes.probably_virtual_device(label):
+                label += " · likely virtual"
+            combo.addItem(label, index)
 
-        if not saved and self.live_audio_devices:
+        if not saved_id and allow_default and self.live_audio_devices:
             default_key = self._device_id_hex(self.media_devices.defaultAudioOutput())
-            for index, device in enumerate(self.live_audio_devices):
-                if self._device_id_hex(device) == default_key:
-                    chosen = index
-                    break
+            chosen = self._device_index_for_id(default_key)
             if chosen < 0:
                 chosen = 0
 
-        if missing_saved_device:
-            self.live_output_combo.setCurrentIndex(0)
+        if missing_saved or (not saved_id and not allow_default):
+            combo.setCurrentIndex(0)
         elif chosen >= 0:
-            self.live_output_combo.setCurrentIndex(chosen)
-        self.live_output_combo.blockSignals(False)
-        self.live_speak_button.setEnabled(self.current_live_audio_device() is not None)
-        if missing_saved_device:
-            self.live_status_label.setText("Saved audio output is unavailable. Choose a new destination.")
+            data_index = combo.findData(chosen)
+            if data_index >= 0:
+                combo.setCurrentIndex(data_index)
+        combo.blockSignals(False)
+        return missing_saved
+
+    def refresh_live_audio_devices(self):
+        if not hasattr(self, "live_output_combo"):
+            return
+        self.live_audio_devices = list(self.media_devices.audioOutputs())
+        profile = self.active_live_route_profile()
+
+        missing_primary = self._fill_live_device_combo(
+            self.live_output_combo,
+            profile.output_device_id,
+            profile.output_device_name,
+            allow_default=not profile.external,
+            prompt="Choose the virtual/external output device…",
+        )
+        self._fill_live_device_combo(
+            self.live_monitor_combo,
+            profile.monitor_device_id,
+            profile.monitor_device_name,
+            allow_default=False,
+            prompt="Choose a headphone/monitor output…",
+        )
+        self.live_monitor_checkbox.blockSignals(True)
+        self.live_monitor_checkbox.setChecked(bool(profile.monitor_enabled))
+        self.live_monitor_checkbox.blockSignals(False)
+        self.live_monitor_combo.setEnabled(bool(profile.monitor_enabled) and not self.live_voice_busy)
+
+        if missing_primary:
+            self.live_external_armed = False
+            self.live_status_label.setText(
+                "Saved primary output is unavailable. Choose a new destination."
+            )
+        self.update_live_route_state()
 
     def current_live_audio_device(self):
         index = self.live_output_combo.currentData()
@@ -238,14 +312,154 @@ class LiveVoicePage:
             return None
         return self.live_audio_devices[index]
 
+    def current_live_monitor_device(self):
+        if not self.live_monitor_checkbox.isChecked():
+            return None
+        index = self.live_monitor_combo.currentData()
+        if not isinstance(index, int) or not (0 <= index < len(self.live_audio_devices)):
+            return None
+        return self.live_audio_devices[index]
+
+    def on_live_route_profile_changed(self, _index):
+        profile_id = self.live_route_profile_combo.currentData()
+        if not profile_id:
+            return
+        self.live_route_store.select(str(profile_id))
+        self.live_external_armed = False
+        self.live_monitor_output.stop()
+        self.live_audio_output.stop()
+        self.live_route_store.persist()
+        self.save_app_settings()
+        self.refresh_live_audio_devices()
+
     def on_live_output_changed(self, _index):
         device = self.current_live_audio_device()
+        profile = self.active_live_route_profile()
         if device is None:
-            return
-        settings = self.app_settings.setdefault("live_voice", {})
-        settings["output_device_id"] = self._device_id_hex(device)
-        settings["output_device_name"] = device.description()
+            profile.output_device_id = ""
+            profile.output_device_name = ""
+        else:
+            profile.output_device_id = self._device_id_hex(device)
+            profile.output_device_name = device.description()
+        if profile.external:
+            self.live_external_armed = False
+        self.live_route_store.persist()
         self.save_app_settings()
+        self.update_live_route_state()
+
+    def on_live_monitor_toggled(self, enabled):
+        profile = self.active_live_route_profile()
+        profile.monitor_enabled = bool(enabled)
+        if not enabled:
+            self.live_monitor_output.stop()
+        self.live_route_store.persist()
+        self.save_app_settings()
+        self.live_monitor_combo.setEnabled(bool(enabled) and not self.live_voice_busy)
+        self.update_live_route_state()
+
+    def on_live_monitor_changed(self, _index):
+        device = self.current_live_monitor_device()
+        profile = self.active_live_route_profile()
+        if device is None:
+            profile.monitor_device_id = ""
+            profile.monitor_device_name = ""
+        else:
+            profile.monitor_device_id = self._device_id_hex(device)
+            profile.monitor_device_name = device.description()
+        self.live_route_store.persist()
+        self.save_app_settings()
+
+    def toggle_live_external_arm(self):
+        profile = self.active_live_route_profile()
+        if not profile.external:
+            return
+        if self.live_external_armed:
+            self.live_external_armed = False
+        else:
+            device = self.current_live_audio_device()
+            if device is None:
+                QMessageBox.information(
+                    self,
+                    "External route",
+                    "Choose the virtual/external output device before arming this route.",
+                )
+                return
+            self.live_external_armed = True
+        self.update_live_route_state()
+
+    def update_live_route_state(self):
+        if not hasattr(self, "live_route_state"):
+            return
+        profile = self.active_live_route_profile()
+        device_ok = self.current_live_audio_device() is not None
+        if profile.external:
+            self.live_arm_button.setVisible(True)
+            self.live_arm_button.setText(
+                "Disarm external route" if self.live_external_armed else "Arm external route"
+            )
+            if self.live_external_armed and device_ok:
+                self.live_route_state.setText("ARMED")
+                description = self.current_live_audio_device().description()
+                if not live_routes.probably_virtual_device(description):
+                    self.live_route_state.setToolTip(
+                        "This output is armed as external, but its name is not recognized as a common virtual audio device."
+                    )
+                else:
+                    self.live_route_state.setToolTip("External audio output is armed for this app session.")
+            else:
+                self.live_route_state.setText("DISARMED")
+                self.live_route_state.setToolTip(
+                    "External routes start disarmed each time This Voice Thing launches."
+                )
+        else:
+            self.live_external_armed = False
+            self.live_arm_button.setVisible(False)
+            self.live_route_state.setText("LOCAL ONLY")
+            self.live_route_state.setToolTip("Speech is routed only to the selected local output.")
+
+        can_speak = (
+            device_ok
+            and not getattr(self, "model_is_loading", False)
+            and not self.is_generating
+            and not self.api_busy
+            and (not profile.external or self.live_external_armed)
+        )
+        self.live_speak_button.setEnabled(can_speak)
+        self.live_monitor_combo.setEnabled(
+            self.live_monitor_checkbox.isChecked() and not self.live_voice_busy
+        )
+
+    def live_route_problem(self):
+        profile = self.active_live_route_profile()
+        if self.current_live_audio_device() is None:
+            return "Choose a valid primary audio output first."
+        if profile.external and not self.live_external_armed:
+            return (
+                "The external route is disarmed. Arm it explicitly before sending speech "
+                "to a virtual microphone or other external destination."
+            )
+        return ""
+
+    def live_test_route(self):
+        problem = self.live_route_problem()
+        if problem:
+            QMessageBox.information(self, "Test route", problem)
+            return
+        if self.model is None:
+            QMessageBox.information(
+                self, "Test route", "Load a voice model first so the route test can speak."
+            )
+            return
+        if getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy:
+            QMessageBox.information(
+                self, "Test route", "The model is busy. Try the route test when generation is idle."
+            )
+            return
+        self.live_voice_queue.append({"text": "This Voice Thing route test."})
+        self._refresh_live_queue()
+        self.live_stop_all_requested = False
+        if self.live_speech_thread is None:
+            self._live_start_next()
 
     def _live_generate_kwargs(self):
         return {
@@ -292,8 +506,9 @@ class LiveVoicePage:
                 "The model is busy with another generation or load. Try again when it is ready.",
             )
             return
-        if self.current_live_audio_device() is None:
-            QMessageBox.information(self, "Live Voice", "Choose an audio output device first.")
+        route_problem = self.live_route_problem()
+        if route_problem:
+            QMessageBox.information(self, "Live Voice route", route_problem)
             return
 
         self.live_voice_queue.append({"text": text})
@@ -310,6 +525,8 @@ class LiveVoicePage:
             self.live_voice_current = None
             self.live_current_label.setText("Nothing speaking.")
             self.live_audio_output.finish_input()
+            if self.live_monitor_output.route_description():
+                self.live_monitor_output.finish_input()
             self._set_live_generation_busy(False)
             return
 
@@ -346,13 +563,30 @@ class LiveVoicePage:
     def on_live_stream_started(self, meta):
         device = self.current_live_audio_device()
         if device is None:
-            self.on_live_audio_error("The selected audio output disappeared.")
+            self.on_live_audio_error("The selected primary audio output disappeared.")
             return
         try:
             self.live_audio_output.configure(device, int(meta["sample_rate"]))
         except Exception as exc:
             self.on_live_audio_error(str(exc))
             return
+
+        monitor = self.current_live_monitor_device()
+        self.live_monitor_status.setText("")
+        if self.live_monitor_checkbox.isChecked():
+            if monitor is None:
+                self.live_monitor_output.stop()
+                self.live_monitor_status.setText("Monitor unavailable; primary route continues.")
+            elif self._device_id_hex(monitor) == self._device_id_hex(device):
+                self.live_monitor_output.stop()
+                self.live_monitor_status.setText("Monitor matches primary; not duplicated.")
+            else:
+                try:
+                    self.live_monitor_output.configure(monitor, int(meta["sample_rate"]))
+                    self.live_monitor_status.setText(f"Monitoring: {monitor.description()}")
+                except Exception as exc:
+                    self.on_live_monitor_error(str(exc))
+
         mode = str(meta.get("mode") or "buffered")
         self.live_mode_label.setText(
             {"native": "Native streaming", "segmented": "Segmented streaming"}.get(
@@ -371,6 +605,12 @@ class LiveVoicePage:
             self.live_audio_output.push(frame.pcm)
         except Exception as exc:
             self.on_live_audio_error(str(exc))
+            return
+        if self.live_monitor_output.route_description():
+            try:
+                self.live_monitor_output.push(frame.pcm)
+            except Exception as exc:
+                self.on_live_monitor_error(str(exc))
 
     def on_live_session_complete(self, metrics):
         if not metrics.get("cancelled") and self.live_voice_current:
@@ -425,6 +665,7 @@ class LiveVoicePage:
         if self.live_speech_thread is None and not self.live_audio_output.is_playing():
             return
         self.live_audio_output.stop()
+        self.live_monitor_output.stop()
         if self.live_speech_thread is not None:
             self.live_speech_thread.stop()
             self.live_status_label.setText("Stopping current…")
@@ -438,6 +679,7 @@ class LiveVoicePage:
         self.live_voice_queue.clear()
         self._refresh_live_queue()
         self.live_audio_output.stop()
+        self.live_monitor_output.stop()
         if self.live_speech_thread is not None:
             self.live_speech_thread.stop()
             self.live_status_label.setText("Stopping…")
@@ -558,6 +800,10 @@ class LiveVoicePage:
         )
 
     def _queue_soundboard_pad(self, pad, force_generate=False):
+        route_problem = self.live_route_problem()
+        if route_problem:
+            QMessageBox.information(self, "Soundboard route", route_problem)
+            return
         expected = self._soundboard_cache_key(pad)
         cached = (
             not force_generate
@@ -573,6 +819,15 @@ class LiveVoicePage:
             })
             self.soundboard_status_label.setText(f"{pad.label}: cached")
         else:
+            if self.live_speech_thread is None and (
+                getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy
+            ):
+                QMessageBox.information(
+                    self,
+                    "Soundboard",
+                    "This pad needs to be regenerated, but the model is busy with another task.",
+                )
+                return
             if not self._current_context_matches_pad(pad):
                 QMessageBox.information(
                     self,
@@ -631,17 +886,26 @@ class LiveVoicePage:
         self.live_stop_current_button.setEnabled(busy or audible)
         self.live_stop_all_button.setEnabled(busy or audible or bool(self.live_voice_queue))
         self.live_output_combo.setEnabled(not busy)
+        self.live_route_profile_combo.setEnabled(not busy)
+        self.live_arm_button.setEnabled(not busy)
+        self.live_route_test_button.setEnabled(not busy)
+        self.live_monitor_checkbox.setEnabled(not busy)
+        self.live_monitor_combo.setEnabled(not busy and self.live_monitor_checkbox.isChecked())
         other_busy = getattr(self, "model_is_loading", False) or self.api_busy
         self.model_repo_combo.setEnabled(not busy and not other_busy)
         self.generate_button.setEnabled(not busy and not other_busy and self.model is not None)
         self.preview_button.setEnabled(not busy and not other_busy and self.model is not None)
 
-    def on_live_buffer_changed(self, milliseconds):
-        audible = self.live_audio_output.is_playing() or milliseconds > 1.0
+    def _refresh_live_stop_buttons(self):
+        audible = self.live_audio_output.is_playing() or self.live_monitor_output.is_playing()
         self.live_stop_current_button.setEnabled(self.live_voice_busy or audible)
         self.live_stop_all_button.setEnabled(
             self.live_voice_busy or audible or bool(self.live_voice_queue)
         )
+        return audible
+
+    def on_live_buffer_changed(self, milliseconds):
+        audible = self._refresh_live_stop_buttons() or milliseconds > 1.0
         if audible:
             self.live_status_label.setText(
                 f"Speaking · {milliseconds / 1000.0:.2f}s buffered"
@@ -649,16 +913,29 @@ class LiveVoicePage:
 
     def on_live_audio_drained(self):
         if self.live_speech_thread is None and not self.live_voice_queue:
+            if self.live_audio_output.is_playing() or self.live_monitor_output.is_playing():
+                self._refresh_live_stop_buttons()
+                self.live_current_label.setText("Finishing playback…")
+                return
             self.live_stop_current_button.setEnabled(False)
             self.live_stop_all_button.setEnabled(False)
             self.live_current_label.setText("Nothing speaking.")
             self.live_status_label.setText("Ready")
+
+    def on_live_monitor_error(self, message):
+        self.live_monitor_output.stop()
+        self.live_monitor_status.setText(f"Monitor stopped: {message}")
+        self.set_status_message(
+            f"Status: Live Voice monitor stopped, but the primary route is still active: {message}"
+        )
+        self._refresh_live_stop_buttons()
 
     def on_live_audio_error(self, message):
         self.live_voice_last_error = str(message)
         self.live_voice_queue.clear()
         self._refresh_live_queue()
         self.live_audio_output.stop()
+        self.live_monitor_output.stop()
         if self.live_speech_thread is not None:
             self.live_speech_thread.stop()
         self.live_status_label.setText(f"Audio error: {message}")
@@ -669,5 +946,6 @@ class LiveVoicePage:
         self.live_voice_queue.clear()
         self._refresh_live_queue()
         self.live_audio_output.stop()
+        self.live_monitor_output.stop()
         self.live_status_label.setText(f"Speech error: {message}")
         self.set_status_message(f"Status: Live Voice generation error: {message}")

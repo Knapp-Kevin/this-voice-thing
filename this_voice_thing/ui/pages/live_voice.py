@@ -213,8 +213,14 @@ class LiveVoicePage:
         mic_layout.addLayout(mic_input_row)
 
         effects_row = QHBoxLayout()
+        mic_settings = self._live_mic_settings()
         self.live_mic_effects_enabled = QCheckBox("Enable effects")
-        self.live_mic_effects_enabled.setChecked(True)
+        self.live_mic_effects_enabled.setChecked(
+            bool(mic_settings.get("effects_enabled", True))
+        )
+        self.live_mic_effects_enabled.toggled.connect(
+            self.on_live_mic_effect_setting_changed
+        )
         effects_row.addWidget(self.live_mic_effects_enabled)
 
         effects_row.addWidget(QLabel("Gain dB"))
@@ -222,7 +228,10 @@ class LiveVoicePage:
         self.live_mic_gain.setRange(-24.0, 24.0)
         self.live_mic_gain.setDecimals(1)
         self.live_mic_gain.setSingleStep(1.0)
-        self.live_mic_gain.setValue(0.0)
+        self.live_mic_gain.setValue(float(mic_settings.get("gain_db", 0.0)))
+        self.live_mic_gain.valueChanged.connect(
+            self.on_live_mic_effect_setting_changed
+        )
         effects_row.addWidget(self.live_mic_gain)
 
         effects_row.addWidget(QLabel("Tone"))
@@ -230,12 +239,20 @@ class LiveVoicePage:
         self.live_mic_tone.setRange(-1.0, 1.0)
         self.live_mic_tone.setDecimals(2)
         self.live_mic_tone.setSingleStep(0.1)
-        self.live_mic_tone.setValue(0.0)
+        self.live_mic_tone.setValue(float(mic_settings.get("tone", 0.0)))
         self.live_mic_tone.setToolTip("-1 warmer/darker · +1 brighter")
+        self.live_mic_tone.valueChanged.connect(
+            self.on_live_mic_effect_setting_changed
+        )
         effects_row.addWidget(self.live_mic_tone)
 
         self.live_mic_compressor = QCheckBox("Compressor")
-        self.live_mic_compressor.setChecked(True)
+        self.live_mic_compressor.setChecked(
+            bool(mic_settings.get("compressor_enabled", True))
+        )
+        self.live_mic_compressor.toggled.connect(
+            self.on_live_mic_effect_setting_changed
+        )
         effects_row.addWidget(self.live_mic_compressor)
 
         effects_row.addStretch(1)
@@ -677,6 +694,16 @@ class LiveVoicePage:
         if mic_mode:
             self.live_mode_label.setText("Microphone effects")
             self.live_provenance_label.setText("Provenance: live microphone · not recorded")
+
+    def on_live_mic_effect_setting_changed(self, *_args):
+        if not hasattr(self, "live_mic_effects_enabled"):
+            return
+        settings = self._live_mic_settings()
+        settings["effects_enabled"] = bool(self.live_mic_effects_enabled.isChecked())
+        settings["gain_db"] = float(self.live_mic_gain.value())
+        settings["tone"] = float(self.live_mic_tone.value())
+        settings["compressor_enabled"] = bool(self.live_mic_compressor.isChecked())
+        self.save_app_settings()
 
     def _live_mic_effects_config(self):
         if not self.live_mic_effects_enabled.isChecked():

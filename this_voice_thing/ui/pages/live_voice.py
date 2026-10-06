@@ -184,6 +184,22 @@ class LiveVoicePage:
         layout.addWidget(queue_card, 1)
 
         board_card, board_layout = self._make_card("Soundboard")
+        board_header = QHBoxLayout()
+        board_header.addWidget(QLabel("Board"))
+        self.soundboard_board_combo = QComboBox()
+        self.soundboard_board_combo.currentIndexChanged.connect(self.on_soundboard_board_changed)
+        board_header.addWidget(self.soundboard_board_combo, 1)
+        new_board = self._link(QPushButton("New"))
+        new_board.clicked.connect(self.create_soundboard_board)
+        board_header.addWidget(new_board)
+        rename_board = self._link(QPushButton("Rename"))
+        rename_board.clicked.connect(self.rename_soundboard_board)
+        board_header.addWidget(rename_board)
+        self.soundboard_delete_board_button = self._link(QPushButton("Delete board"))
+        self.soundboard_delete_board_button.clicked.connect(self.delete_soundboard_board)
+        board_header.addWidget(self.soundboard_delete_board_button)
+        board_layout.addLayout(board_header)
+
         self.soundboard_list = QListWidget()
         self.soundboard_list.setMinimumHeight(130)
         self.soundboard_list.itemDoubleClicked.connect(lambda _item: self.trigger_selected_soundboard_pad())
@@ -205,8 +221,23 @@ class LiveVoicePage:
         board_layout.addLayout(board_actions)
         layout.addWidget(board_card, 1)
 
-        QShortcut(QKeySequence("Ctrl+Return"), page, activated=self.live_submit)
-        QShortcut(QKeySequence("Ctrl+Enter"), page, activated=self.live_submit)
+        self.live_voice_shortcuts = []
+        self._add_live_shortcut(page, "Ctrl+Return", self.live_submit)
+        self._add_live_shortcut(page, "Ctrl+Enter", self.live_submit)
+        self._add_live_shortcut(page, "Ctrl+.", self.live_stop_all)
+        self._add_live_shortcut(page, "Ctrl+Shift+Return", self.live_repeat_last)
+        self._add_live_shortcut(page, "Ctrl+Shift+Enter", self.live_repeat_last)
+        for number in range(1, 10):
+            self._add_live_shortcut(
+                page,
+                f"Alt+{number}",
+                lambda index=number - 1: self.trigger_soundboard_pad_index(index),
+            )
+            self._add_live_shortcut(
+                page,
+                f"Ctrl+Alt+{number}",
+                lambda index=number - 1: self.select_soundboard_board_index(index),
+            )
 
         self.pages.addWidget(page)
         try:
@@ -216,8 +247,16 @@ class LiveVoicePage:
             pass
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
+        self.refresh_soundboard_boards()
         self.refresh_soundboard()
         self.update_live_route_state()
+
+    def _add_live_shortcut(self, page, sequence, callback):
+        shortcut = QShortcut(QKeySequence(sequence), page)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(callback)
+        self.live_voice_shortcuts.append(shortcut)
+        return shortcut
 
     def refresh_live_voice_summary(self):
         if not hasattr(self, "live_voice_name_label"):
@@ -842,6 +881,83 @@ class LiveVoicePage:
             top_p=float(self.top_p),
         )
 
+    def refresh_soundboard_boards(self, select_id=None):
+        if not hasattr(self, "soundboard_board_combo"):
+            return
+        selected = select_id or self.soundboard_store.active_board_id
+        self.soundboard_board_combo.blockSignals(True)
+        self.soundboard_board_combo.clear()
+        for index, board in enumerate(self.soundboard_store.boards, 1):
+            shortcut = f"Ctrl+Alt+{index}" if index <= 9 else ""
+            label = f"{board.name}  [{shortcut}]" if shortcut else board.name
+            self.soundboard_board_combo.addItem(label, board.id)
+        idx = self.soundboard_board_combo.findData(selected)
+        self.soundboard_board_combo.setCurrentIndex(max(0, idx))
+        self.soundboard_board_combo.blockSignals(False)
+        self.soundboard_delete_board_button.setEnabled(len(self.soundboard_store.boards) > 1)
+
+    def on_soundboard_board_changed(self, _index):
+        board_id = self.soundboard_board_combo.currentData()
+        if not board_id:
+            return
+        self.soundboard_store.select_board(str(board_id))
+        self.refresh_soundboard()
+
+    def create_soundboard_board(self):
+        name, accepted = QInputDialog.getText(self, "New soundboard", "Board name:", text="New board")
+        if not accepted or not name.strip():
+            return
+        board = self.soundboard_store.add_board(name.strip())
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.refresh_soundboard()
+        self.soundboard_status_label.setText(f"Created board: {board.name}")
+
+    def rename_soundboard_board(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        name, accepted = QInputDialog.getText(
+            self, "Rename soundboard", "Board name:", text=board.name
+        )
+        if not accepted or not name.strip():
+            return
+        board = self.soundboard_store.rename_board(board.id, name.strip())
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.soundboard_status_label.setText(f"Renamed board: {board.name}")
+
+    def delete_soundboard_board(self):
+        board = self.soundboard_store.active_board()
+        if board is None or len(self.soundboard_store.boards) <= 1:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete soundboard",
+            f"Delete the board '{board.name}' and all {len(board.pads)} pad(s) on it? "
+            "Cached audio no longer used by another board will also be removed.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.soundboard_store.remove_board(board.id)
+        if removed is not None:
+            self.refresh_soundboard_boards()
+            self.refresh_soundboard()
+            self.soundboard_status_label.setText(f"Deleted board: {removed.name}")
+
+    def select_soundboard_board_index(self, index):
+        if not (0 <= index < len(self.soundboard_store.boards)):
+            return
+        board = self.soundboard_store.boards[index]
+        self.soundboard_store.select_board(board.id)
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.refresh_soundboard()
+        self.soundboard_status_label.setText(f"Board: {board.name}")
+
+    def trigger_soundboard_pad_index(self, index):
+        board = self.soundboard_store.active_board()
+        if board is None or not (0 <= index < len(board.pads)):
+            return
+        self._queue_soundboard_pad(board.pads[index])
+
     def save_soundboard_pad(self):
         text = self.live_text_input.toPlainText().strip()
         if not text and self.live_voice_history:
@@ -959,14 +1075,19 @@ class LiveVoicePage:
         board = self.soundboard_store.active_board()
         if board is None:
             return
-        for pad in board.pads:
+        for index, pad in enumerate(board.pads, 1):
             expected = self._soundboard_cache_key(pad)
             cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
             suffix = " · cached" if cached else " · rebuild needed"
-            self.soundboard_list.addItem(f"{pad.label}{suffix}")
+            shortcut = f"Alt+{index}" if index <= 9 else ""
+            shortcut_suffix = f"  [{shortcut}]" if shortcut else ""
+            self.soundboard_list.addItem(f"{pad.label}{suffix}{shortcut_suffix}")
             item = self.soundboard_list.item(self.soundboard_list.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, pad.id)
-            item.setToolTip(pad.text)
+            tooltip = pad.text
+            if shortcut:
+                tooltip += f"\nShortcut: {shortcut}"
+            item.setToolTip(tooltip)
             if select_id == pad.id:
                 self.soundboard_list.setCurrentItem(item)
 

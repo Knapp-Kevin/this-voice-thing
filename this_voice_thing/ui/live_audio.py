@@ -1,6 +1,7 @@
 """Qt runtime for Live Voice generation and raw PCM playback."""
 
 import threading
+import time
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
@@ -107,6 +108,12 @@ class LiveAudioOutput(QObject):
         self._started = False
         self._input_finished = False
         self._drained_emitted = False
+        self._configured_at = None
+        self._sink_started_at = None
+        self._bytes_written = 0
+        self._underruns = 0
+        self._last_state = None
+        self._last_stats = {}
         self._timer = QTimer(self)
         self._timer.setInterval(10)
         self._timer.timeout.connect(self._tick)
@@ -177,6 +184,7 @@ class LiveAudioOutput(QObject):
                 )
             self._input_finished = False
             self._drained_emitted = False
+            self._last_stats = {}
             self._timer.start()
             return
 
@@ -194,6 +202,13 @@ class LiveAudioOutput(QObject):
             source_rate, fmt.sampleRate(), fmt.channelCount()
         )
         self._sink = QAudioSink(device, fmt, self)
+        self._sink.stateChanged.connect(self._on_state_changed)
+        self._configured_at = time.monotonic()
+        self._sink_started_at = None
+        self._bytes_written = 0
+        self._underruns = 0
+        self._last_state = None
+        self._last_stats = {}
         bytes_per_second = fmt.sampleRate() * fmt.channelCount() * 2
         self._sink.setBufferSize(max(4096, int(bytes_per_second * self.SINK_BUFFER_SECONDS)))
         self._pending.clear()
@@ -213,6 +228,7 @@ class LiveAudioOutput(QObject):
         self._io = self._sink.start()
         if self._io is None:
             raise RuntimeError("Qt could not open the selected audio output device.")
+        self._sink_started_at = time.monotonic()
         self._started = True
 
     def push(self, pcm):
@@ -252,7 +268,19 @@ class LiveAudioOutput(QObject):
             written = int(self._io.write(chunk))
             if written <= 0:
                 break
+            self._bytes_written += written
             del self._pending[:written]
+
+    def _on_state_changed(self, state):
+        if (
+            self._last_state == QAudio.State.ActiveState
+            and state == QAudio.State.IdleState
+            and self._started
+            and not self._input_finished
+            and self._bytes_written > 0
+        ):
+            self._underruns += 1
+        self._last_state = state
 
     def _tick(self):
         try:
@@ -267,6 +295,7 @@ class LiveAudioOutput(QObject):
                 and not self._drained_emitted
             ):
                 self._drained_emitted = True
+                self._last_stats = self.stats()
                 self.drained.emit()
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -290,6 +319,35 @@ class LiveAudioOutput(QObject):
             return False
         return self._sink.state() == QAudio.State.ActiveState or self.buffered_ms() > 1.0
 
+    def stats(self):
+        now = time.monotonic()
+        target_rate = self._format.sampleRate() if self._format is not None else None
+        channels = self._format.channelCount() if self._format is not None else None
+        configured_to_start = None
+        if self._configured_at is not None and self._sink_started_at is not None:
+            configured_to_start = self._sink_started_at - self._configured_at
+        return {
+            "source_rate": self._source_rate,
+            "target_rate": target_rate,
+            "channels": channels,
+            "buffered_ms": round(self.buffered_ms(), 2),
+            "underruns": int(self._underruns),
+            "bytes_written": int(self._bytes_written),
+            "configured_to_start_seconds": (
+                round(configured_to_start, 4) if configured_to_start is not None else None
+            ),
+            "active_seconds": (
+                round(now - self._sink_started_at, 4)
+                if self._sink_started_at is not None
+                else None
+            ),
+            "started": bool(self._started),
+            "input_finished": bool(self._input_finished),
+        }
+
+    def last_stats(self):
+        return dict(self._last_stats or self.stats())
+
     def route_description(self):
         if self._format is None:
             return ""
@@ -299,6 +357,7 @@ class LiveAudioOutput(QObject):
         )
 
     def stop(self):
+        self._last_stats = self.stats()
         self._timer.stop()
         self._pending.clear()
         self._input_finished = False

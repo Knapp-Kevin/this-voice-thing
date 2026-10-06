@@ -53,11 +53,13 @@ class VoxCPMModel:
 
     backend = NAME
 
-    def __init__(self, repo_id, worker, sample_rate, mode):
+    def __init__(self, repo_id, worker, sample_rate, mode, v2=True):
         self.repo_id = repo_id
         self.worker = worker
         self.sr = sample_rate
         self.device = worker.device
+        self.native_streaming = bool(v2)
+        self.last_stream_metrics = {}
         self.supported_languages = dict(LANGUAGE_LABELS)
         self.speakers = []
         self.speaker = None
@@ -92,23 +94,29 @@ class VoxCPMModel:
     def generate(self, text, **kwargs):
         return self.generate_batch([text], **kwargs)[0]
 
+    def _generation_request(self, text, audio_prompt_path=None, cmd="generate", out_path=None):
+        request = dict(cmd=cmd, text=text, style="",
+                       seed=int(torch.initial_seed() % 2**31),
+                       cfg_value=self.cfg_value, timesteps=self.timesteps)
+        if out_path is not None:
+            request["out_path"] = out_path
+        if self.voxcpm_mode == "design":
+            if self._anchor is None:
+                request["style"] = self.instruct.strip()
+            else:
+                request.update(prompt_wav=self._anchor[0], prompt_text=self._anchor[1],
+                               reference_wav=self._anchor[0])
+        else:
+            request.update(reference_wav=audio_prompt_path, style=self.instruct.strip())
+            if self.ref_text.strip() and audio_prompt_path:
+                request.update(prompt_wav=audio_prompt_path, prompt_text=self.ref_text.strip())
+        return request
+
     def generate_batch(self, texts, audio_prompt_path=None, **_ignored):
         results = []
         for text in texts:
             path = os.path.join(self._temp_dir, f"section_{len(os.listdir(self._temp_dir))}.wav")
-            request = dict(cmd="generate", text=text, out_path=path, style="",
-                           seed=int(torch.initial_seed() % 2**31),
-                           cfg_value=self.cfg_value, timesteps=self.timesteps)
-            if self.voxcpm_mode == "design":
-                if self._anchor is None:
-                    request["style"] = self.instruct.strip()
-                else:
-                    request.update(prompt_wav=self._anchor[0], prompt_text=self._anchor[1],
-                                   reference_wav=self._anchor[0])
-            else:
-                request.update(reference_wav=audio_prompt_path, style=self.instruct.strip())
-                if self.ref_text.strip() and audio_prompt_path:
-                    request.update(prompt_wav=audio_prompt_path, prompt_text=self.ref_text.strip())
+            request = self._generation_request(text, audio_prompt_path, out_path=path)
             reply = self.worker.request(**request)
             wav, sr = sf.read(reply["path"], dtype="float32")
             self.sr = sr
@@ -118,6 +126,25 @@ class VoxCPMModel:
                 wav = self._watermark.apply(wav, sr, "VoxCPM")
             results.append(torch.from_numpy(np.ascontiguousarray(wav)).unsqueeze(0))
         return results
+
+    def generate_streaming_pcm(self, text, audio_prompt_path=None):
+        """Yield model-native mono s16le PCM chunks from VoxCPM2.
+
+        This is intentionally a raw/live path: whole-waveform finishing and the
+        Perth watermark are not applied. The HTTP API advertises that distinction
+        explicitly rather than silently pretending streamed audio is identical to
+        a completed render.
+        """
+        if not self.native_streaming:
+            raise RuntimeError("Native PCM streaming is available only for VoxCPM2.")
+        request = self._generation_request(text, audio_prompt_path, cmd="generate_stream")
+        self.last_stream_metrics = {}
+        for event in self.worker.request_stream(**request):
+            kind = event.get("event")
+            if kind == "audio":
+                yield base64.b64decode(event["data"])
+            elif kind == "done":
+                self.last_stream_metrics = dict(event)
 
     def close(self):
         self.worker.close()
@@ -134,4 +161,4 @@ def load_voxcpm_model(repo_id, mode="clone", log=print):
     except Exception:
         worker.close()
         raise
-    return VoxCPMModel(repo_id, worker, info.get("sample_rate", 48000), mode)
+    return VoxCPMModel(repo_id, worker, info.get("sample_rate", 48000), mode, info.get("v2", False))

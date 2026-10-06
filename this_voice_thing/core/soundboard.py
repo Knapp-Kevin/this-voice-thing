@@ -33,7 +33,7 @@ class Pad:
     repetition_penalty: float = 1.2
     min_p: float = 0.05
     top_p: float = 1.0
-    interrupt_policy: str = "queue"
+    interrupt_policy: str = ""
     cache_policy: str = "auto"
     cache_key: str = ""
     audio_file: str = ""
@@ -257,7 +257,7 @@ class SoundboardStore:
         source = os.path.abspath(str(path or ""))
         if not os.path.isfile(source):
             raise FileNotFoundError(source)
-        pad = Pad(label=str(label or "").strip() or os.path.basename(source), text="", kind="audio")
+        pad = Pad(label=str(label or "").strip() or os.path.basename(source), text="", kind="audio", interrupt_policy="")
         extension = os.path.splitext(source)[1].lower()
         filename = f"{pad.id}{extension or '.audio'}"
         os.makedirs(self.audio_dir, exist_ok=True)

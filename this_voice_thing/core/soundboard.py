@@ -35,6 +35,7 @@ class Pad:
     interrupt_policy: str = "queue"
     cache_policy: str = "auto"
     cache_key: str = ""
+    hotkey: str = ""
     tags: list = field(default_factory=list)
     created: str = field(default_factory=lambda: datetime.datetime.now().isoformat(timespec="seconds"))
 

@@ -473,6 +473,14 @@ Seed-VC Realtime evaluation:
 - isolated technical benchmark: **3–5 days**
 - distributable integration: dependent on explicit GPL/product decision
 
+## Follow-up roadmap
+
+The accepted microphone-transformation architecture and implementation frontier are maintained in:
+
+- [Live Voice microphone transformation roadmap](live-voice-microphone-transformation-roadmap.md)
+
+That roadmap separates low-resource DSP microphone effects from neural voice conversion, reuses the existing AudioRouter, and deliberately keeps blocked product-integration scopes out of the active issue backlog until their prerequisites resolve.
+
 ## Cross-track conclusions
 
 ### What we should build now

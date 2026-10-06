@@ -8,6 +8,7 @@ delivery metadata: native, segmented, or buffered.
 
 from dataclasses import dataclass
 import time
+import wave
 
 import numpy as np
 
@@ -140,6 +141,70 @@ class LiveSpeechSession:
             close = getattr(source, "close", None)
             if close is not None:
                 close()
+            self._ended_at = time.monotonic()
+
+    def metrics(self):
+        started = self._started_at
+        ended = self._ended_at or time.monotonic()
+        wall = (ended - started) if started is not None else 0.0
+        audio_seconds = self._audio_bytes / float(self.sample_rate * 2)
+        return {
+            "mode": self.delivery_mode,
+            "sample_rate": self.sample_rate,
+            "frames": self._frames,
+            "audio_seconds": round(audio_seconds, 4),
+            "generation_seconds": round(wall, 4),
+            "ttfa_seconds": (
+                round(self._first_audio_at - started, 4)
+                if started is not None and self._first_audio_at is not None
+                else None
+            ),
+            "rtf": round(wall / audio_seconds, 4) if audio_seconds else None,
+            "cancelled": bool(self.cancelled),
+            "provenance": self.provenance,
+        }
+
+
+class CachedSpeechSession:
+    """Read a cached mono s16 WAV through the same frame interface as live TTS."""
+
+    def __init__(self, path, label="Cached soundboard"):
+        self.path = path
+        self.label = label
+        with wave.open(path, "rb") as handle:
+            if handle.getnchannels() != 1 or handle.getsampwidth() != 2:
+                raise ValueError("Cached soundboard audio must be mono 16-bit PCM WAV.")
+            self.sample_rate = int(handle.getframerate())
+        self.delivery_mode = "cached"
+        self.provenance = "soundboard-cache"
+        self._started_at = None
+        self._first_audio_at = None
+        self._ended_at = None
+        self._audio_bytes = 0
+        self._frames = 0
+        self.cancelled = False
+
+    def frames(self, cancelled=lambda: False):
+        self._started_at = time.monotonic()
+        try:
+            with wave.open(self.path, "rb") as handle:
+                while True:
+                    if cancelled():
+                        self.cancelled = True
+                        break
+                    pcm = handle.readframes(4096)
+                    if not pcm:
+                        break
+                    if self._first_audio_at is None:
+                        self._first_audio_at = time.monotonic()
+                    self._frames += 1
+                    self._audio_bytes += len(pcm)
+                    yield AudioFrame(
+                        pcm=pcm,
+                        sample_rate=self.sample_rate,
+                        provenance=self.provenance,
+                    )
+        finally:
             self._ended_at = time.monotonic()
 
     def metrics(self):

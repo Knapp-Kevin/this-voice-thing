@@ -96,6 +96,27 @@ class WorkerProcess:
             raise RuntimeError(reply.get("error", f"{self.tag} request failed."))
         return reply
 
+
+    def request_stream(self, **payload):
+        """Yield JSON-line events for one long-running worker request.
+
+        The worker lock stays held until the terminal done event, an error,
+        or the consumer closes the generator. This keeps one model process from
+        receiving an interleaved request while it is still producing audio.
+        """
+        with self.lock:
+            if self.process.poll() is not None:
+                raise RuntimeError(f"The {self.tag} worker is not running.")
+            self.process.stdin.write(json.dumps(payload) + "\n")
+            self.process.stdin.flush()
+            while True:
+                reply = self._read_reply()
+                if not reply.get("ok"):
+                    raise RuntimeError(reply.get("error", f"{self.tag} streaming request failed."))
+                yield reply
+                if reply.get("event") == "done":
+                    return
+
     def close(self):
         if self.process.poll() is None:
             try:

@@ -13,6 +13,7 @@ entries switch instantly once either is loaded.
 import base64
 import os
 import tempfile
+import uuid
 
 import numpy as np
 import soundfile as sf
@@ -139,7 +140,10 @@ class VoxCPMModel:
         if not self.native_streaming:
             raise RuntimeError("Native PCM streaming is available only for VoxCPM2.")
         request = self._generation_request(text, audio_prompt_path, cmd="generate_stream")
+        cancel_path = os.path.join(self._temp_dir, f"cancel_{uuid.uuid4().hex}")
+        request["cancel_path"] = cancel_path
         self.last_stream_metrics = {}
+        completed = False
         events = self.worker.request_stream(**request)
         try:
             for event in events:
@@ -147,11 +151,25 @@ class VoxCPMModel:
                 if kind == "audio":
                     yield base64.b64decode(event["data"])
                 elif kind == "done":
+                    completed = True
                     self.last_stream_metrics = dict(event)
         finally:
+            if not completed:
+                # The worker cannot read a second stdin command while VoxCPM is inside
+                # generate_streaming(). A same-machine sentinel is enough to request
+                # cancellation at the next yielded native audio chunk.
+                try:
+                    with open(cancel_path, "wb"):
+                        pass
+                except OSError:
+                    pass
             close = getattr(events, "close", None)
             if close is not None:
                 close()
+            try:
+                os.remove(cancel_path)
+            except OSError:
+                pass
 
     def close(self):
         self.worker.close()

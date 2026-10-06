@@ -19,6 +19,7 @@ text, which is how VoxCPM2 takes voice design and style control.
 
 import base64
 import json
+import os
 import sys
 import time
 import traceback
@@ -111,21 +112,37 @@ def main():
         first_audio_at = None
         total_samples = 0
         chunks = 0
+        cancelled = False
+        cancel_path = req.get("cancel_path") or ""
         reply(ok=True, event="start", sample_rate=sr, format="s16le", channels=1)
-        for wav in model.generate_streaming(**kwargs):
-            wav = np.asarray(wav, dtype=np.float32).reshape(-1)
-            if not len(wav):
-                continue
-            if first_audio_at is None:
-                first_audio_at = time.monotonic()
-            data = pcm16(wav)
-            total_samples += len(wav)
-            chunks += 1
-            reply(ok=True, event="audio", data=base64.b64encode(data).decode("ascii"),
-                  samples=len(wav))
+        stream = model.generate_streaming(**kwargs)
+        try:
+            for wav in stream:
+                if cancel_path and os.path.exists(cancel_path):
+                    cancelled = True
+                    break
+                wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+                if not len(wav):
+                    continue
+                if first_audio_at is None:
+                    first_audio_at = time.monotonic()
+                data = pcm16(wav)
+                total_samples += len(wav)
+                chunks += 1
+                reply(ok=True, event="audio", data=base64.b64encode(data).decode("ascii"),
+                      samples=len(wav))
+        finally:
+            close = getattr(stream, "close", None)
+            if close is not None:
+                close()
+            if cancel_path:
+                try:
+                    os.remove(cancel_path)
+                except FileNotFoundError:
+                    pass
         ended = time.monotonic()
         reply(ok=True, event="done", sample_rate=sr, format="s16le", channels=1,
-              samples=total_samples, chunks=chunks,
+              samples=total_samples, chunks=chunks, cancelled=cancelled,
               seconds=round(total_samples / sr, 4),
               generation_seconds=round(ended - started, 4),
               ttfa_seconds=round((first_audio_at - started), 4) if first_audio_at else None)

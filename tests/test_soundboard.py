@@ -104,6 +104,22 @@ class SoundboardStoreTests(unittest.TestCase):
             self.assertEqual(handle.getframerate(), 48000)
             self.assertEqual(handle.readframes(480), pcm)
 
+    def test_clear_cache_preserves_pads_and_resets_provenance(self):
+        pad = self.store.add_pad(Pad(label="Test", text="Hello."))
+        key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})
+        path = self.store.write_pcm_cache(key, b"\x00\x00" * 10, 16000)
+        pad.cache_key = key
+        pad.cache_provenance = "live-native-unwatermarked"
+        self.store.save()
+
+        removed = self.store.clear_cache()
+
+        self.assertEqual(removed, 1)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual(self.store.get_pad(pad.id).cache_key, "")
+        self.assertEqual(self.store.get_pad(pad.id).cache_provenance, "")
+        self.assertEqual(len(self.store.active_board().pads), 1)
+
     def test_removing_last_reference_garbage_collects_cache(self):
         pad = self.store.add_pad(Pad(label="Test", text="Hello."))
         key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})

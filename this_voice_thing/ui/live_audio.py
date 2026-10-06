@@ -129,7 +129,9 @@ class LiveAudioOutput(QObject):
     def _choose_format(self, device, source_rate):
         preferred = device.preferredFormat()
         rates = []
-        for rate in (source_rate, 48000, preferred.sampleRate(), 44100):
+        # Prefer one stable Windows-friendly sink rate so queued voices with
+        # different model-native rates can share the same live output stream.
+        for rate in (48000, preferred.sampleRate(), source_rate, 44100):
             rate = int(rate or 0)
             if rate > 0 and rate not in rates:
                 rates.append(rate)
@@ -147,20 +149,44 @@ class LiveAudioOutput(QObject):
             f"{device.description()} does not advertise a compatible mono/stereo Int16 format."
         )
 
+    @staticmethod
+    def _same_format(a, b):
+        return (
+            a is not None and b is not None
+            and a.sampleRate() == b.sampleRate()
+            and a.channelCount() == b.channelCount()
+            and a.sampleFormat() == b.sampleFormat()
+        )
+
     def configure(self, device, source_rate):
         key = self.device_key(device)
         source_rate = int(source_rate)
-        if (
-            self._sink is not None
-            and key == self._device_key
-            and source_rate == self._source_rate
-        ):
+        fmt = self._choose_format(device, source_rate)
+
+        if self._sink is not None and key == self._device_key and self._same_format(fmt, self._format):
+            if source_rate != self._source_rate:
+                # Finish the old source-side resampler without resetting the sink;
+                # this preserves audio already queued from the previous item.
+                if self._converter is not None:
+                    tail = self._converter.convert(b"", final=True)
+                    if tail:
+                        self._pending.extend(tail)
+                self._source_rate = source_rate
+                self._converter = StreamingPcmConverter(
+                    source_rate, fmt.sampleRate(), fmt.channelCount()
+                )
             self._input_finished = False
             self._drained_emitted = False
+            self._timer.start()
             return
 
+        if self.is_playing():
+            raise RuntimeError(
+                "The next item needs a different output format while previous audio is still playing. "
+                "Wait for the current audio to finish before switching this route."
+            )
+
         self.stop()
-        fmt = self._choose_format(device, source_rate)
         self._device_key = key
         self._source_rate = source_rate
         self._format = fmt
@@ -256,6 +282,13 @@ class LiveAudioOutput(QObject):
             free = max(0, int(self._sink.bytesFree()))
             queued += max(0, size - free)
         return 1000.0 * queued / bps
+
+    def is_playing(self):
+        if self._pending:
+            return True
+        if self._sink is None or not self._started:
+            return False
+        return self._sink.state() == QAudio.State.ActiveState or self.buffered_ms() > 1.0
 
     def route_description(self):
         if self._format is None:

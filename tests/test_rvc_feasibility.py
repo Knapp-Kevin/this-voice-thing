@@ -32,6 +32,13 @@ soundfile>=0.13,<1
         self.assertTrue(any(rvc.TORCH_INDEX in command for command in flattened))
         self.assertTrue(any(rvc.PYPI_INDEX in command for command in flattened))
 
+    def test_shared_assets_are_pinned_by_revision_and_checksum(self):
+        self.assertEqual(len(rvc.ASSET_REVISION), 40)
+        int(rvc.ASSET_REVISION, 16)
+        self.assertEqual(len(rvc.HUBERT_MODEL_SHA256), 64)
+        self.assertEqual(len(rvc.RMVPE_SHA256), 64)
+        self.assertNotEqual(rvc.ASSET_REVISION, "main")
+
     def test_offline_command_uses_pinned_environment_and_does_not_fake_formant(self):
         with tempfile.TemporaryDirectory() as tmp:
             model = Path(tmp) / "voice.pth"

@@ -88,6 +88,69 @@ class SoundboardStoreTests(unittest.TestCase):
         pad = Pad(label="Bad", text="", kind="audio", audio_file="../outside.wav")
         self.assertEqual(self.store.audio_path(pad), "")
 
+    def test_named_boards_create_select_rename_and_persist(self):
+        first = self.store.active_board()
+        second = self.store.create_board("Gaming")
+
+        self.assertEqual(self.store.active_board_id, second.id)
+        self.assertEqual(second.name, "Gaming")
+
+        renamed = self.store.rename_board(second.id, "Calls")
+        self.assertEqual(renamed.name, "Calls")
+
+        self.store.select_board(first.id)
+        self.assertEqual(self.store.active_board_id, first.id)
+
+        reloaded = SoundboardStore(self.temp.name)
+        self.assertEqual(reloaded.active_board_id, first.id)
+        self.assertEqual(reloaded.get_board(second.id).name, "Calls")
+
+    def test_duplicate_board_names_are_made_unique(self):
+        first = self.store.create_board("Gaming")
+        second = self.store.create_board("Gaming")
+
+        self.assertEqual(first.name, "Gaming")
+        self.assertEqual(second.name, "Gaming 2")
+
+    def test_last_board_cannot_be_deleted(self):
+        only = self.store.active_board()
+        with self.assertRaisesRegex(ValueError, "last soundboard"):
+            self.store.remove_board(only.id)
+
+    def test_deleting_board_removes_owned_audio_and_selects_another(self):
+        main = self.store.active_board()
+        doomed = self.store.create_board("Temporary")
+        source = os.path.join(self.temp.name, "source.wav")
+        with wave.open(source, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"\x01\x00" * 16)
+        pad = self.store.import_audio_pad(source, "Clip", board=doomed)
+        owned = self.store.audio_path(pad)
+
+        removed = self.store.remove_board(doomed.id)
+
+        self.assertEqual(removed.id, doomed.id)
+        self.assertFalse(os.path.exists(owned))
+        self.assertEqual(self.store.active_board_id, main.id)
+
+    def test_deleting_board_keeps_cache_referenced_by_other_board(self):
+        main = self.store.active_board()
+        shared = Pad(label="Shared", text="Same")
+        key = self.store.cache_digest(shared, {"voice_fingerprint": "same"})
+        shared.cache_key = key
+        self.store.add_pad(shared, board=main)
+        path = self.store.write_pcm_cache(key, b"\x00\x00" * 10, 16000)
+
+        other = self.store.create_board("Other")
+        duplicate = Pad(label="Shared", text="Same", cache_key=key)
+        self.store.add_pad(duplicate, board=other)
+
+        self.store.remove_board(other.id)
+
+        self.assertTrue(os.path.exists(path))
+
     def test_removing_last_reference_garbage_collects_cache(self):
         pad = self.store.add_pad(Pad(label="Test", text="Hello."))
         key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})

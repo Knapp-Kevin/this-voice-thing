@@ -193,6 +193,15 @@ class LiveVoicePage:
         repeat = self._link(QPushButton("Repeat last"))
         repeat.clicked.connect(self.live_repeat_last)
         queue_actions.addWidget(repeat)
+        remove = self._link(QPushButton("Remove selected"))
+        remove.clicked.connect(self.live_remove_selected_queue_item)
+        queue_actions.addWidget(remove)
+        move_up = self._link(QPushButton("Move up"))
+        move_up.clicked.connect(lambda: self.live_move_selected_queue_item(-1))
+        queue_actions.addWidget(move_up)
+        move_down = self._link(QPushButton("Move down"))
+        move_down.clicked.connect(lambda: self.live_move_selected_queue_item(1))
+        queue_actions.addWidget(move_down)
         clear = self._link(QPushButton("Clear queued"))
         clear.clicked.connect(self.live_clear_queue)
         queue_actions.addWidget(clear)
@@ -253,6 +262,9 @@ class LiveVoicePage:
         self._add_live_shortcut(page, "Ctrl+.", self.live_stop_all)
         self._add_live_shortcut(page, "Ctrl+Shift+Return", self.live_repeat_last)
         self._add_live_shortcut(page, "Ctrl+Shift+Enter", self.live_repeat_last)
+        self._add_live_shortcut(page, "Delete", self.live_remove_selected_queue_item)
+        self._add_live_shortcut(page, "Alt+Up", lambda: self.live_move_selected_queue_item(-1))
+        self._add_live_shortcut(page, "Alt+Down", lambda: self.live_move_selected_queue_item(1))
         for number in range(1, 10):
             self._add_live_shortcut(
                 page,
@@ -297,6 +309,13 @@ class LiveVoicePage:
         self.live_model_label.setText(
             loaded["label"] if loaded else "No model loaded"
         )
+        if getattr(self, "model_is_loading", False):
+            readiness = "Voice model: getting ready…"
+        elif self.model is not None:
+            readiness = "Voice model: ready"
+        else:
+            readiness = "Voice model: load one to speak"
+        self.live_model_label.setToolTip(readiness)
         if self.model is None:
             mode = "Unavailable"
         elif getattr(self.model, "native_streaming", False):
@@ -984,6 +1003,31 @@ class LiveVoicePage:
         }
         QApplication.clipboard().setText(json.dumps(payload, indent=2, ensure_ascii=False))
         self.live_status_label.setText("Live Voice diagnostics copied.")
+
+    def live_remove_selected_queue_item(self):
+        row = self.live_queue_list.currentRow()
+        if not (0 <= row < len(self.live_voice_queue)):
+            return
+        removed = self.live_voice_queue.pop(row)
+        self._refresh_live_queue()
+        self.live_status_label.setText(
+            f"Removed queued item: {str(removed.get('text') or '')[:80]}"
+        )
+        if self.live_queue_list.count():
+            self.live_queue_list.setCurrentRow(min(row, self.live_queue_list.count() - 1))
+
+    def live_move_selected_queue_item(self, direction):
+        row = self.live_queue_list.currentRow()
+        if not (0 <= row < len(self.live_voice_queue)):
+            return
+        target = row + int(direction)
+        if not (0 <= target < len(self.live_voice_queue)):
+            return
+        item = self.live_voice_queue.pop(row)
+        self.live_voice_queue.insert(target, item)
+        self._refresh_live_queue()
+        self.live_queue_list.setCurrentRow(target)
+        self.live_status_label.setText("Queued speech reordered.")
 
     def live_clear_queue(self):
         self.live_voice_queue.clear()

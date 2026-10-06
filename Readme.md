@@ -262,6 +262,8 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Stop all** discards audible buffered audio and clears the queue.
 - **Repeat last** resubmits the most recent completed line.
 - **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
+- **Multiple boards:** create, rename, switch and delete soundboard boards without mixing unrelated phrase sets together.
+- **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, and **Ctrl+Shift+Enter** repeats the last line. These are not system-wide hotkeys.
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.

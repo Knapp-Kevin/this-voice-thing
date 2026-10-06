@@ -47,6 +47,11 @@ class LiveVoicePage:
         self.live_voice_name_label = QLabel("Default voice")
         self.live_voice_name_label.setObjectName("VoiceChip")
         voice_row.addWidget(self.live_voice_name_label)
+        change_voice = self._link(QPushButton("Change"))
+        live_voice_menu = self._build_voice_menu()
+        live_voice_menu.aboutToHide.connect(self.refresh_live_voice_summary)
+        change_voice.setMenu(live_voice_menu)
+        voice_row.addWidget(change_voice)
         voice_row.addSpacing(14)
         voice_row.addWidget(QLabel("Model"))
         self.live_model_label = QLabel("No model loaded")
@@ -167,8 +172,6 @@ class LiveVoicePage:
         self.live_audio_devices = list(self.media_devices.audioOutputs())
         self.live_output_combo.blockSignals(True)
         self.live_output_combo.clear()
-        for index, device in enumerate(self.live_audio_devices):
-            self.live_output_combo.addItem(device.description(), index)
 
         chosen = -1
         if saved:
@@ -176,18 +179,32 @@ class LiveVoicePage:
                 if self._device_id_hex(device) == saved:
                     chosen = index
                     break
-        if chosen < 0 and self.live_audio_devices:
+
+        missing_saved_device = bool(saved) and chosen < 0
+        if missing_saved_device:
+            saved_name = self.app_settings.get("live_voice", {}).get("output_device_name", "saved output")
+            self.live_output_combo.addItem(f"Unavailable: {saved_name} — choose another output", None)
+
+        for index, device in enumerate(self.live_audio_devices):
+            self.live_output_combo.addItem(device.description(), index)
+
+        if not saved and self.live_audio_devices:
             default_key = self._device_id_hex(self.media_devices.defaultAudioOutput())
             for index, device in enumerate(self.live_audio_devices):
                 if self._device_id_hex(device) == default_key:
                     chosen = index
                     break
-        if chosen < 0 and self.live_audio_devices:
-            chosen = 0
-        if chosen >= 0:
+            if chosen < 0:
+                chosen = 0
+
+        if missing_saved_device:
+            self.live_output_combo.setCurrentIndex(0)
+        elif chosen >= 0:
             self.live_output_combo.setCurrentIndex(chosen)
         self.live_output_combo.blockSignals(False)
-        self.live_speak_button.setEnabled(bool(self.live_audio_devices))
+        self.live_speak_button.setEnabled(self.current_live_audio_device() is not None)
+        if missing_saved_device:
+            self.live_status_label.setText("Saved audio output is unavailable. Choose a new destination.")
 
     def current_live_audio_device(self):
         index = self.live_output_combo.currentData()
@@ -272,6 +289,7 @@ class LiveVoicePage:
 
         item = self.live_voice_queue.pop(0)
         self.live_voice_current = item
+        self.live_voice_last_error = ""
         self._refresh_live_queue()
         try:
             session = self._make_live_session(item["text"])
@@ -320,11 +338,12 @@ class LiveVoicePage:
             self.on_live_audio_error(str(exc))
 
     def on_live_session_complete(self, metrics):
-        self.live_voice_history.append({
-            "text": self.live_voice_current["text"] if self.live_voice_current else "",
-            "metrics": dict(metrics),
-        })
-        self.live_voice_history = self.live_voice_history[-50:]
+        if not metrics.get("cancelled"):
+            self.live_voice_history.append({
+                "text": self.live_voice_current["text"] if self.live_voice_current else "",
+                "metrics": dict(metrics),
+            })
+            self.live_voice_history = self.live_voice_history[-50:]
         ttfa = metrics.get("ttfa_seconds")
         rtf = metrics.get("rtf")
         details = []

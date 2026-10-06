@@ -159,7 +159,7 @@ class LiveAudioInput(QObject):
             effects=self._effects,
             parent=self,
         )
-        self._worker.frame_ready.connect(self.frame_ready)
+        self._worker.frame_ready.connect(self.frame_ready.emit)
         self._worker.failed.connect(self._on_worker_failed)
         self._worker.complete.connect(self._on_worker_complete)
         self._worker.start()

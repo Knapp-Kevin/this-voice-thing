@@ -14,7 +14,14 @@ This harness exists to make the RVC decision reproducible before This Voice Thin
 - Runtime: Python 3.12
 - RTX 50-series Torch pair: `torch==2.7.1+cu128`, `torchaudio==2.7.1+cu128`
 
-The upstream model/voice `.pth` and `.index` files are **not** covered merely because the RVC source code is MIT. Record the license/provenance of every target voice model used for evaluation.
+Shared inference assets are also pinned for reproducibility:
+
+- Hugging Face repo: `lj1995/VoiceConversionWebUI`
+- Revision: `1be9d36ece685661920e1a7cb36eb0437c1e5581`
+- HuBERT model SHA256: `cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5`
+- RMVPE SHA256: `6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193`
+
+The upstream model/voice `.pth` and `.index` files are **not** covered merely because the RVC source code or shared asset repo is MIT. Record the license/provenance of every target voice model used for evaluation.
 
 ## Why pin it
 

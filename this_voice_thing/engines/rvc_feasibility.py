@@ -126,7 +126,7 @@ def build_offline_command(
     input_path: str,
     output_path: str,
     index_path: str | None = None,
-    pitch: float = 0.0,
+    pitch: int = 0,
     formant: float = 0.0,
     f0_method: str = "rmvpe",
     index_rate: float = 0.0,
@@ -144,11 +144,12 @@ def build_offline_command(
         "--output",
         str(Path(output_path).resolve()),
         "--pitch",
-        str(float(pitch)),
+        str(int(pitch)),
         "--f0-method",
         f0_method,
         "--index-rate",
         str(float(index_rate)),
+        "--overwrite",
     ]
     if index_path:
         command += ["--index", str(Path(index_path).resolve())]
@@ -344,6 +345,6 @@ def offline_convert(
         "bytes": output.stat().st_size,
         "upstream_revision": UPSTREAM_COMMIT,
         "f0_method": f0_method,
-        "pitch": float(pitch),
+        "pitch": int(pitch),
         "index_rate": float(index_rate),
     }

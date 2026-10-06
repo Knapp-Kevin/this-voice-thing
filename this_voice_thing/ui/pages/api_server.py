@@ -128,10 +128,16 @@ class ApiServer:
     def api_models(self):
         rows = []
         for entry in self.model_entries:
+            native_streaming = entry.get("backend") == "voxcpm" and "voxcpm2" in entry["repo_id"].lower()
             rows.append({
                 "id": entry["label"], "object": "model", "repo_id": entry["repo_id"],
                 "engine": model_registry.engine_label(entry),
                 "capability": model_registry.capability_for(entry),
+                "streaming": {
+                    "audio": "native" if native_streaming else "none",
+                    "response_format": "pcm" if native_streaming else None,
+                    "sample_rate": 48000 if native_streaming else None,
+                },
                 "loaded": self.is_active_entry(entry), "downloaded": model_registry.is_downloaded(entry),
                 "installed": self.engine_installed(entry),
             })

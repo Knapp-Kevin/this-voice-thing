@@ -1,3 +1,4 @@
+# Live Voice infrastructure checks; keep this workflow lightweight and path-scoped.
 name: Live Voice CI
 
 on:

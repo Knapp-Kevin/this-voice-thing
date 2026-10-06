@@ -402,6 +402,8 @@ python scripts/benchmark_live_api.py --model "VoxCPM2 voice cloning" --voice "YO
 
 The benchmark reports time to first audio (TTFA) and real-time factor (RTF). RTF below 1.0 means synthesis stays ahead of playback; lower is better.
 
+The architecture, live-mode definitions, provenance policy, validation gates and planned merge order are documented in [docs/live-tts-architecture.md](docs/live-tts-architecture.md).
+
 </details>
 
 ## Google Docs sign-in setup

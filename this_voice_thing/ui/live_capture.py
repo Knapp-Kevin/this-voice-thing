@@ -66,8 +66,8 @@ class LiveAudioInput(QObject):
     started = Signal(object)
     stopped = Signal(object)
 
-    RING_BUFFER_SECONDS = 0.50
-    SOURCE_BUFFER_SECONDS = 0.10
+    RING_BUFFER_SECONDS = 0.25
+    SOURCE_BUFFER_SECONDS = 0.05
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -176,8 +176,19 @@ class LiveAudioInput(QObject):
         self._last_metrics = {}
         self._io = self._source.start()
         if self._io is None:
+            worker = self._worker
+            self._worker = None
             self._active = False
-            self._worker.stop()
+            if worker is not None:
+                worker.stop()
+                worker.wait(250)
+            try:
+                self._source.stop()
+            except Exception:
+                pass
+            self._source.deleteLater()
+            self._source = None
+            self._ring.close(discard=True)
             raise RuntimeError("Qt could not open the selected microphone/input device.")
         self._io.readyRead.connect(self._read_available)
         self.started.emit(self.stats())

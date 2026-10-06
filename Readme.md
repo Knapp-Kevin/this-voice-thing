@@ -381,7 +381,12 @@ Discovery endpoints: `GET /v1/health`, `GET /v1/models`, `GET /v1/voices`.
 
 ### Experimental live PCM streaming
 
-VoxCPM2 can return audio while the model is still generating it. This is a deliberately raw live path rather than a completed render:
+The local API supports two live delivery modes:
+
+- **VoxCPM2 · native:** returns acoustic PCM chunks while one utterance is still being generated.
+- **Kokoro · segmented:** quickly generates short speech sections and returns each completed section while the following section is generated.
+
+Both use the same request shape. For VoxCPM2 voice cloning:
 
 ```bash
 curl http://127.0.0.1:8765/v1/audio/speech \
@@ -390,9 +395,9 @@ curl http://127.0.0.1:8765/v1/audio/speech \
   --no-buffer > speech.pcm
 ```
 
-The stream is mono signed 16-bit little-endian PCM at the model's native sample rate (48 kHz for VoxCPM2). Response headers include `X-Audio-Sample-Rate`, `X-Audio-Sample-Format`, `X-Streaming-Mode` and `X-Audio-Watermark`.
+The stream is mono signed 16-bit little-endian PCM at the model's native sample rate (48 kHz for VoxCPM2, 24 kHz for Kokoro). Response headers include `X-Audio-Sample-Rate`, `X-Audio-Sample-Format`, `X-Streaming-Mode` (`native` or `segmented`) and `X-Audio-Watermark`.
 
-The live path intentionally does **not** run whole-waveform finishing such as speed/pitch processing, final silence trimming, global volume levelling, subtitle alignment or the normal Perth watermark. Those still apply to completed renders. Streaming currently requires `speed=1.0` and raw PCM output; the API rejects incompatible options rather than silently changing their meaning.
+Live output intentionally does **not** run whole-waveform finishing such as speed/pitch processing, final global volume levelling or subtitle alignment. VoxCPM2's raw native path also does not currently apply the normal Perth watermark. Kokoro's segmented path retains its existing per-section watermark and the app's clause/sentence/paragraph seam pauses. Streaming currently requires `speed=1.0` and raw PCM output; the API rejects incompatible options rather than silently changing their meaning.
 
 To measure actual latency and sustained throughput on the current machine:
 
@@ -400,7 +405,7 @@ To measure actual latency and sustained throughput on the current machine:
 python scripts/benchmark_live_api.py --model "VoxCPM2 voice cloning" --voice "YOUR CLIP VOICE"
 ```
 
-The benchmark reports time to first audio (TTFA) and real-time factor (RTF). RTF below 1.0 means synthesis stays ahead of playback; lower is better.
+The benchmark reports time to first audio (TTFA) and real-time factor (RTF). RTF below 1.0 means synthesis stays ahead of playback; lower is better. The model can be changed to `"Kokoro voices"` to measure segmented delivery.
 
 The architecture, live-mode definitions, provenance policy, validation gates and planned merge order are documented in [docs/live-tts-architecture.md](docs/live-tts-architecture.md).
 

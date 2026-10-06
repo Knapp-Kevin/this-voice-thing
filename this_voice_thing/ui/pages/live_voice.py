@@ -8,11 +8,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QMessageBox,
+    QInputDialog,
     QPlainTextEdit,
     QPushButton,
 )
 
-from this_voice_thing.core.live_voice import LiveSpeechSession
+from this_voice_thing.core import soundboard, voice_library
+from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
 from this_voice_thing.engines import vibevoice as vibevoice_engine
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
 from this_voice_thing.ui import theme as ui_theme
@@ -30,6 +32,7 @@ class LiveVoicePage:
         self.live_voice_stop_all_requested = False
         self.live_voice_last_error = ""
         self.live_audio_devices = []
+        self.soundboard_store = soundboard.SoundboardStore(self.script_dir)
 
         self.live_audio_output = LiveAudioOutput(self)
         self.live_audio_output.failed.connect(self.on_live_audio_error)
@@ -123,6 +126,28 @@ class LiveVoicePage:
         queue_layout.addLayout(queue_actions)
         layout.addWidget(queue_card, 1)
 
+        board_card, board_layout = self._make_card("Soundboard")
+        self.soundboard_list = QListWidget()
+        self.soundboard_list.setMinimumHeight(130)
+        self.soundboard_list.itemDoubleClicked.connect(lambda _item: self.trigger_selected_soundboard_pad())
+        board_layout.addWidget(self.soundboard_list)
+        board_actions = QHBoxLayout()
+        save_pad = self._accent(QPushButton("Save text as pad"))
+        save_pad.clicked.connect(self.save_soundboard_pad)
+        board_actions.addWidget(save_pad)
+        trigger_pad = QPushButton("Trigger")
+        trigger_pad.clicked.connect(self.trigger_selected_soundboard_pad)
+        board_actions.addWidget(trigger_pad)
+        delete_pad = self._link(QPushButton("Delete"))
+        delete_pad.clicked.connect(self.delete_selected_soundboard_pad)
+        board_actions.addWidget(delete_pad)
+        board_actions.addStretch(1)
+        self.soundboard_status_label = QLabel("Static TTS pads cache locally after their first successful generation.")
+        self.soundboard_status_label.setObjectName("Muted")
+        board_actions.addWidget(self.soundboard_status_label)
+        board_layout.addLayout(board_actions)
+        layout.addWidget(board_card, 1)
+
         QShortcut(QKeySequence("Ctrl+Return"), page, activated=self.live_submit)
         QShortcut(QKeySequence("Ctrl+Enter"), page, activated=self.live_submit)
 
@@ -133,6 +158,7 @@ class LiveVoicePage:
             pass
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
+        self.refresh_soundboard()
 
     def refresh_live_voice_summary(self):
         if not hasattr(self, "live_voice_name_label"):
@@ -292,7 +318,13 @@ class LiveVoicePage:
         self.live_voice_last_error = ""
         self._refresh_live_queue()
         try:
-            session = self._make_live_session(item["text"])
+            if item.get("cached_path"):
+                session = CachedSpeechSession(item["cached_path"], item.get("label") or "Soundboard")
+            else:
+                session = self._make_live_session(item["text"])
+                if item.get("cache_key"):
+                    item["_cache_pcm"] = bytearray()
+                    item["_cache_sample_rate"] = 0
         except Exception as exc:
             self.live_voice_current = None
             self.live_status_label.setText(f"Cannot speak: {exc}")
@@ -332,18 +364,36 @@ class LiveVoicePage:
         )
 
     def on_live_frame(self, frame):
+        if self.live_voice_current and self.live_voice_current.get("cache_key"):
+            self.live_voice_current["_cache_pcm"].extend(frame.pcm)
+            self.live_voice_current["_cache_sample_rate"] = int(frame.sample_rate)
         try:
             self.live_audio_output.push(frame.pcm)
         except Exception as exc:
             self.on_live_audio_error(str(exc))
 
     def on_live_session_complete(self, metrics):
-        if not metrics.get("cancelled"):
+        if not metrics.get("cancelled") and self.live_voice_current:
             self.live_voice_history.append({
-                "text": self.live_voice_current["text"] if self.live_voice_current else "",
+                "text": self.live_voice_current["text"],
                 "metrics": dict(metrics),
             })
             self.live_voice_history = self.live_voice_history[-50:]
+            cache_key = self.live_voice_current.get("cache_key")
+            pcm = self.live_voice_current.get("_cache_pcm")
+            sample_rate = self.live_voice_current.get("_cache_sample_rate")
+            pad_id = self.live_voice_current.get("soundboard_pad_id")
+            if cache_key and pcm and sample_rate and pad_id:
+                try:
+                    self.soundboard_store.write_pcm_cache(cache_key, pcm, sample_rate)
+                    pad = self.soundboard_store.get_pad(pad_id)
+                    if pad is not None:
+                        pad.cache_key = cache_key
+                        self.soundboard_store.save()
+                        self.soundboard_store.garbage_collect_cache()
+                    self.refresh_soundboard()
+                except Exception as exc:
+                    self.soundboard_status_label.setText(f"Could not cache pad: {exc}")
         ttfa = metrics.get("ttfa_seconds")
         rtf = metrics.get("rtf")
         details = []
@@ -405,6 +455,169 @@ class LiveVoicePage:
             return
         self.live_text_input.setPlainText(self.live_voice_history[-1]["text"])
         self.live_submit()
+
+    def _soundboard_pronunciation_fingerprint(self):
+        return [
+            (rule.word, rule.say, rule.whole_word, rule.match_case, rule.enabled)
+            for rule in self.pronunciations.rules
+        ] if self.pronunciations.enabled else []
+
+    def _soundboard_synthesis_context(self, pad):
+        voice = self.voice_library.get(pad.voice_id) if pad.voice_id else None
+        clip_path = self.voice_library.clip_path(voice) if voice is not None and voice.has_clip else ""
+        transcript = voice_library.read_transcript(clip_path) if clip_path else ""
+        return {
+            "voice_fingerprint": soundboard.voice_fingerprint(voice, clip_path, transcript),
+            "pronunciations": self._soundboard_pronunciation_fingerprint(),
+            "synthesis_settings": {
+                "temperature": pad.temperature,
+                "exaggeration": pad.exaggeration,
+                "cfg_weight": pad.cfg_weight,
+                "repetition_penalty": pad.repetition_penalty,
+                "min_p": pad.min_p,
+                "top_p": pad.top_p,
+            },
+        }
+
+    def _soundboard_cache_key(self, pad):
+        return self.soundboard_store.cache_digest(
+            pad, self._soundboard_synthesis_context(pad)
+        )
+
+    def _current_soundboard_pad(self, label, text):
+        loaded = self.loaded_entry()
+        worker = self.active_qwen_model()
+        return soundboard.Pad(
+            label=label,
+            text=text,
+            voice_id=self.active_voice_id or "",
+            model_repo_id=loaded["repo_id"] if loaded else "",
+            model_backend=loaded.get("backend", "") if loaded else "",
+            model_mode=loaded.get("mode", "") if loaded else "",
+            language=self.language_combo.currentData() or "en",
+            style=self.qwen_instruct_input.text().strip() if worker is not None else "",
+            temperature=float(self.temp_slider.get_value()),
+            exaggeration=float(self.exaggeration_slider.get_value()),
+            cfg_weight=float(self.cfg_slider.get_value()),
+            repetition_penalty=float(self.repetition_penalty),
+            min_p=float(self.min_p),
+            top_p=float(self.top_p),
+        )
+
+    def save_soundboard_pad(self):
+        text = self.live_text_input.toPlainText().strip()
+        if not text and self.live_voice_history:
+            text = self.live_voice_history[-1]["text"]
+        if not text:
+            QMessageBox.information(self, "Soundboard", "Type a phrase first, or speak something you can save.")
+            return
+        default = " ".join(text.split())[:32] or "Phrase"
+        label, accepted = QInputDialog.getText(self, "Save soundboard pad", "Pad label:", text=default)
+        if not accepted or not label.strip():
+            return
+        pad = self.soundboard_store.add_pad(self._current_soundboard_pad(label.strip(), text))
+        self.refresh_soundboard(select_id=pad.id)
+        if self.model is None:
+            self.soundboard_status_label.setText(
+                "Pad saved. Load its voice/model later to build the local cache."
+            )
+            return
+        self.soundboard_status_label.setText("Pad saved. Building its local cache…")
+        self._queue_soundboard_pad(pad, force_generate=True)
+
+    def selected_soundboard_pad(self):
+        item = self.soundboard_list.currentItem()
+        if item is None:
+            return None
+        return self.soundboard_store.get_pad(item.data(Qt.ItemDataRole.UserRole))
+
+    def trigger_selected_soundboard_pad(self):
+        pad = self.selected_soundboard_pad()
+        if pad is not None:
+            self._queue_soundboard_pad(pad)
+
+    def _current_context_matches_pad(self, pad):
+        loaded = self.loaded_entry()
+        if loaded is None:
+            return False
+        worker = self.active_qwen_model()
+        current_style = self.qwen_instruct_input.text().strip() if worker is not None else ""
+        return (
+            (self.active_voice_id or "") == pad.voice_id
+            and loaded["repo_id"] == pad.model_repo_id
+            and loaded.get("backend", "") == pad.model_backend
+            and (loaded.get("mode", "") or "") == (pad.model_mode or "")
+            and (self.language_combo.currentData() or "en") == pad.language
+            and current_style == pad.style
+            and abs(float(self.temp_slider.get_value()) - pad.temperature) < 1e-9
+            and abs(float(self.exaggeration_slider.get_value()) - pad.exaggeration) < 1e-9
+            and abs(float(self.cfg_slider.get_value()) - pad.cfg_weight) < 1e-9
+            and abs(float(self.repetition_penalty) - pad.repetition_penalty) < 1e-9
+            and abs(float(self.min_p) - pad.min_p) < 1e-9
+            and abs(float(self.top_p) - pad.top_p) < 1e-9
+        )
+
+    def _queue_soundboard_pad(self, pad, force_generate=False):
+        expected = self._soundboard_cache_key(pad)
+        cached = (
+            not force_generate
+            and pad.cache_key == expected
+            and self.soundboard_store.has_cache(expected)
+        )
+        if cached:
+            self.live_voice_queue.append({
+                "text": pad.text,
+                "label": pad.label,
+                "cached_path": self.soundboard_store.cache_path(expected),
+                "soundboard_pad_id": pad.id,
+            })
+            self.soundboard_status_label.setText(f"{pad.label}: cached")
+        else:
+            if not self._current_context_matches_pad(pad):
+                QMessageBox.information(
+                    self,
+                    "Soundboard cache needs rebuilding",
+                    f"{pad.label} no longer has a valid cache and its saved voice/model is not active. "
+                    "Select that voice/model again, then trigger the pad to rebuild it.",
+                )
+                return
+            self.live_voice_queue.append({
+                "text": pad.text,
+                "label": pad.label,
+                "soundboard_pad_id": pad.id,
+                "cache_key": expected,
+            })
+            self.soundboard_status_label.setText(f"{pad.label}: generating and caching…")
+        self._refresh_live_queue()
+        self.live_voice_stop_all_requested = False
+        if self.live_speech_thread is None:
+            self._live_start_next()
+
+    def delete_selected_soundboard_pad(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        self.soundboard_store.remove_pad(pad.id)
+        self.refresh_soundboard()
+        self.soundboard_status_label.setText(f"Deleted {pad.label}")
+
+    def refresh_soundboard(self, select_id=None):
+        if not hasattr(self, "soundboard_list"):
+            return
+        self.soundboard_list.clear()
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        for pad in board.pads:
+            expected = self._soundboard_cache_key(pad)
+            cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
+            suffix = " · cached" if cached else " · rebuild needed"
+            self.soundboard_list.addItem(f"{pad.label}{suffix}")
+            item = self.soundboard_list.item(self.soundboard_list.count() - 1)
+            item.setData(Qt.ItemDataRole.UserRole, pad.id)
+            item.setToolTip(pad.text)
+            if select_id == pad.id:
+                self.soundboard_list.setCurrentItem(item)
 
     def _refresh_live_queue(self):
         self.live_queue_list.clear()

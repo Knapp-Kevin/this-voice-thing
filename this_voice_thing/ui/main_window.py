@@ -432,6 +432,8 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
             self.set_status_message(current_tooltip)
 
     def closeEvent(self, event):
+        if hasattr(self, "live_hotkeys"):
+            self.live_hotkeys.close()
         if hasattr(self, "live_audio_output"):
             self.live_audio_output.stop()
         if hasattr(self, "live_monitor_output"):

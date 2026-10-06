@@ -265,12 +265,27 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.
-- Pick any audio output exposed by Windows/Qt, including speakers, headphones and compatible virtual audio-cable playback devices.
+- Choose a **Route**: **Local output** or **External / virtual microphone**. Each profile remembers its own primary output device.
+- External routes start **DISARMED** every time the app launches and must be armed explicitly before Speak or a soundboard pad can transmit to them.
+- Pick any audio output exposed by Windows/Qt, including speakers, headphones and compatible virtual audio-cable playback devices. Common virtual-device names are labeled as likely virtual, but the app does not require a specific vendor.
+- Enable **Also let me hear it through** to monitor the same PCM through a second device such as headphones. The monitor has an independent audio sink: if it fails or disappears, the primary external route continues.
+- **Test route** speaks a short phrase through the active route using the current voice.
+- A previously saved primary device that disappears is shown as unavailable. Live Voice does **not** silently fall back to the system speakers.
 - The page reports whether the selected item is using **Native streaming**, **Segmented streaming**, **Buffered fallback**, or **Cached** playback.
 - VoxCPM2 uses native model streaming. Kokoro uses short segmented generation. Other compatible loaded engines can still speak here after completing the utterance.
 - Live playback has its own bounded audio buffer and converts the model's native sample rate when the selected device requires a different supported rate.
 
-This implementation is still **local-output first**. It can target a virtual audio device if one is already installed and now includes the persistent cached TTS soundboard, but guided Discord/Zoom/OBS route profiles, dual-device monitoring, audio-clip pads, multiple-board management and global hotkeys remain later Live Voice slices. The app does not yet install a virtual microphone driver itself.
+This implementation can now route to a normal local device or an **external/virtual-microphone profile**, with optional independent monitoring. It does not install a virtual microphone driver itself. If you already have a virtual audio cable, choose its **playback/input** side under **Send voice to**, arm the external route, and choose the cable's paired **recording/output** side as the microphone in Discord, Zoom, OBS or another application.
+
+For example, with a typical virtual cable:
+
+1. In **Live Voice → Route**, choose **External / virtual microphone**.
+2. Under **Send voice to**, choose the cable's playback endpoint, often named something like **CABLE Input**.
+3. Optionally enable monitoring and choose your headphones.
+4. Click **Arm external route**, then **Test route**.
+5. In Discord/Zoom/etc., choose the paired recording endpoint, often named something like **CABLE Output**, as the microphone.
+
+Exact names depend on the virtual-audio software. This Voice Thing stores the actual Windows/Qt device ID rather than assuming a vendor naming convention. Guided Discord/Zoom/OBS profile instructions, audio-clip pads, multiple-board management and global hotkeys remain later slices.
 
 The desktop Live Voice path does **not** call the local HTTP API. Both surfaces consume the same underlying model streaming capabilities.
 
@@ -572,6 +587,7 @@ this-voice-thing/
 │  │  └─ qwen.py, kokoro.py, voxcpm.py, omnivoice.py, vibevoice.py
 │  ├─ core/
 │  │  ├─ live_voice.py          shared live/cached speech sessions and typed PCM AudioFrame
+│  │  ├─ live_routes.py         persistent route profiles and virtual-device hints
 │  │  ├─ soundboard.py          persistent boards/pads and content-addressed local WAV cache
 │  │  ├─ model_registry.py      engines, capabilities, licenses, hardware needs, Hugging Face discovery
 │  │  ├─ documents.py           document loading, sectioning, conversation scripts

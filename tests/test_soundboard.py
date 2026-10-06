@@ -22,6 +22,7 @@ class SoundboardStoreTests(unittest.TestCase):
             model_repo_id="model/repo",
             model_backend="voxcpm",
             model_mode="clone",
+            hotkey="Ctrl+Alt+1",
         ))
 
         reloaded = SoundboardStore(self.temp.name)
@@ -31,6 +32,7 @@ class SoundboardStoreTests(unittest.TestCase):
         self.assertEqual(found.label, "BRB")
         self.assertEqual(found.text, "Be right back.")
         self.assertEqual(found.voice_id, "voice-1")
+        self.assertEqual(found.hotkey, "Ctrl+Alt+1")
 
     def test_duplicate_labels_are_made_unique(self):
         first = self.store.add_pad(Pad(label="Hello", text="One"))

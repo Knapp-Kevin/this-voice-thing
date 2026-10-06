@@ -114,6 +114,8 @@ class LiveAudioOutput(QObject):
         self._underruns = 0
         self._last_state = None
         self._last_stats = {}
+        self._start_buffer_seconds = self.START_BUFFER_SECONDS
+        self._sink_buffer_seconds = self.SINK_BUFFER_SECONDS
         self._timer = QTimer(self)
         self._timer.setInterval(10)
         self._timer.timeout.connect(self._tick)
@@ -165,9 +167,32 @@ class LiveAudioOutput(QObject):
             and a.sampleFormat() == b.sampleFormat()
         )
 
-    def configure(self, device, source_rate):
+    def configure(
+        self,
+        device,
+        source_rate,
+        *,
+        start_buffer_seconds=None,
+        sink_buffer_seconds=None,
+    ):
         key = self.device_key(device)
         source_rate = int(source_rate)
+        self._start_buffer_seconds = max(
+            0.0,
+            float(
+                self.START_BUFFER_SECONDS
+                if start_buffer_seconds is None
+                else start_buffer_seconds
+            ),
+        )
+        self._sink_buffer_seconds = max(
+            0.02,
+            float(
+                self.SINK_BUFFER_SECONDS
+                if sink_buffer_seconds is None
+                else sink_buffer_seconds
+            ),
+        )
         fmt = self._choose_format(device, source_rate)
 
         if self._sink is not None and key == self._device_key and self._same_format(fmt, self._format):
@@ -210,7 +235,9 @@ class LiveAudioOutput(QObject):
         self._last_state = None
         self._last_stats = {}
         bytes_per_second = fmt.sampleRate() * fmt.channelCount() * 2
-        self._sink.setBufferSize(max(4096, int(bytes_per_second * self.SINK_BUFFER_SECONDS)))
+        self._sink.setBufferSize(
+            max(4096, int(bytes_per_second * self._sink_buffer_seconds))
+        )
         self._pending.clear()
         self._started = False
         self._input_finished = False
@@ -241,7 +268,7 @@ class LiveAudioOutput(QObject):
         if bps and len(self._pending) > int(bps * self.MAX_PENDING_SECONDS):
             raise RuntimeError("Live audio buffer exceeded 30 seconds; stopping instead of growing without bound.")
         if not self._started and (
-            len(self._pending) >= int(bps * self.START_BUFFER_SECONDS)
+            len(self._pending) >= int(bps * self._start_buffer_seconds)
         ):
             self._start_sink()
         self._flush()
@@ -343,6 +370,8 @@ class LiveAudioOutput(QObject):
             ),
             "started": bool(self._started),
             "input_finished": bool(self._input_finished),
+            "start_buffer_seconds": round(self._start_buffer_seconds, 4),
+            "sink_buffer_seconds": round(self._sink_buffer_seconds, 4),
         }
 
     def last_stats(self):

@@ -1350,6 +1350,21 @@ class LiveVoicePage:
             f"Imported {pad.label}. The soundboard now owns a local copy."
         )
 
+    def clear_soundboard_cache(self):
+        answer = QMessageBox.question(
+            self,
+            "Clear soundboard cache",
+            "Delete all cached soundboard TTS audio? Boards, pads, imported audio clips, "
+            "favorites, tags and hotkeys will remain.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.soundboard_store.clear_cache()
+        self.refresh_soundboard()
+        self.soundboard_status_label.setText(
+            f"Cleared {removed} cached TTS audio file(s)."
+        )
+
     def refresh_soundboard_boards(self, select_id=None):
         if not hasattr(self, "soundboard_board_combo"):
             return
@@ -1394,6 +1409,24 @@ class LiveVoicePage:
 
         self.soundboard_defaults_label.setText(
             f"Voice: {voice_name} · Route: {route_name}"
+        )
+        if hasattr(self, "soundboard_board_policy_combo"):
+            self.soundboard_board_policy_combo.blockSignals(True)
+            index = self.soundboard_board_policy_combo.findData(
+                board.default_interrupt_policy or "queue"
+            )
+            self.soundboard_board_policy_combo.setCurrentIndex(max(0, index))
+            self.soundboard_board_policy_combo.blockSignals(False)
+
+    def on_soundboard_board_policy_changed(self, _index):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        policy = str(self.soundboard_board_policy_combo.currentData() or "queue")
+        board.default_interrupt_policy = policy
+        self.soundboard_store.save()
+        self.soundboard_status_label.setText(
+            f"{board.name} default trigger behavior: {self.soundboard_board_policy_combo.currentText()}"
         )
 
     def set_soundboard_default_voice(self):

@@ -20,6 +20,11 @@ DEFAULT_TEXT = (
     "This is a live speech benchmark. The first sound should arrive quickly, "
     "and generation should stay comfortably ahead of playback."
 )
+CANCEL_TEXT = (
+    "This cancellation benchmark is intentionally long enough to still be generating "
+    "after the first audio arrives. It measures how quickly the server releases the "
+    "live speech slot after the client disconnects instead of consuming the rest."
+)
 
 
 def request_once(args):
@@ -92,6 +97,85 @@ def request_once(args):
     }
 
 
+def health(args):
+    parsed = urlsplit(args.url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 80
+    base = parsed.path.rstrip("/")
+    headers = {}
+    if args.token:
+        headers["Authorization"] = f"Bearer {args.token}"
+    connection = http.client.HTTPConnection(host, port, timeout=args.timeout)
+    connection.request("GET", f"{base}/v1/health", headers=headers)
+    response = connection.getresponse()
+    body = response.read()
+    connection.close()
+    if response.status != 200:
+        raise RuntimeError(f"Health check failed with HTTP {response.status}: {body!r}")
+    return json.loads(body.decode("utf-8"))
+
+
+def cancel_once(args):
+    parsed = urlsplit(args.url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 80
+    base = parsed.path.rstrip("/")
+    payload = {
+        "input": CANCEL_TEXT,
+        "stream": True,
+        "stream_format": "audio",
+        "response_format": "pcm",
+    }
+    if args.model:
+        payload["model"] = args.model
+    if args.voice:
+        payload["voice"] = args.voice
+    if args.instructions:
+        payload["instructions"] = args.instructions
+
+    headers = {"Content-Type": "application/json"}
+    if args.token:
+        headers["Authorization"] = f"Bearer {args.token}"
+
+    connection = http.client.HTTPConnection(host, port, timeout=args.timeout)
+    started = time.perf_counter()
+    connection.request(
+        "POST",
+        f"{base}/v1/audio/speech",
+        body=json.dumps(payload),
+        headers=headers,
+    )
+    response = connection.getresponse()
+    if response.status != 200:
+        message = response.read().decode("utf-8", "replace")
+        connection.close()
+        raise RuntimeError(f"HTTP {response.status}: {message}")
+    first = response.read1(args.read_size)
+    first_audio = time.perf_counter()
+    if not first:
+        connection.close()
+        raise RuntimeError("The cancellation stream ended before any audio arrived.")
+
+    response.close()
+    connection.close()
+    cancelled_at = time.perf_counter()
+
+    deadline = cancelled_at + args.cancel_timeout
+    while True:
+        state = health(args)
+        if state.get("status") != "busy":
+            released = time.perf_counter()
+            return {
+                "ttfa": first_audio - started,
+                "cancel_release": released - cancelled_at,
+            }
+        if time.perf_counter() >= deadline:
+            raise RuntimeError(
+                f"API remained busy for more than {args.cancel_timeout:.1f}s after disconnect."
+            )
+        time.sleep(args.cancel_poll)
+
+
 def save_wav(path, result):
     with wave.open(path, "wb") as handle:
         handle.setnchannels(1)
@@ -112,11 +196,15 @@ def main():
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--read-size", type=int, default=4096)
     parser.add_argument("--timeout", type=float, default=300.0)
+    parser.add_argument("--cancel-runs", type=int, default=3,
+                        help="Disconnect after first audio this many times and measure slot release; 0 disables.")
+    parser.add_argument("--cancel-timeout", type=float, default=30.0)
+    parser.add_argument("--cancel-poll", type=float, default=0.05)
     parser.add_argument("--output", default="", help="Optional WAV path for the final measured run.")
     args = parser.parse_args()
 
-    if args.warmup < 0 or args.runs < 1:
-        parser.error("--warmup must be >= 0 and --runs must be >= 1")
+    if args.warmup < 0 or args.runs < 1 or args.cancel_runs < 0:
+        parser.error("--warmup and --cancel-runs must be >= 0; --runs must be >= 1")
 
     for index in range(args.warmup):
         result = request_once(args)
@@ -144,6 +232,21 @@ def main():
         f"best:   TTFA {min(r['ttfa'] for r in results):.3f}s | "
         f"RTF {min(r['rtf'] for r in results):.3f}"
     )
+
+    if args.cancel_runs:
+        print()
+        cancellations = []
+        for index in range(args.cancel_runs):
+            result = cancel_once(args)
+            cancellations.append(result)
+            print(
+                f"cancel {index + 1}: TTFA {result['ttfa']:.3f}s | "
+                f"slot release {result['cancel_release']:.3f}s"
+            )
+        print(
+            f"cancel median: slot release "
+            f"{statistics.median(r['cancel_release'] for r in cancellations):.3f}s"
+        )
 
     if args.output:
         save_wav(args.output, results[-1])

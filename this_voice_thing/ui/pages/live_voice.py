@@ -344,7 +344,7 @@ class LiveVoicePage:
         board_layout.addLayout(board_actions)
 
         hotkey_row = QHBoxLayout()
-        self.live_hotkeys_enabled_checkbox = QCheckBox("Enable global hotkeys")
+        self.live_hotkeys_enabled_checkbox = QCheckBox("Enable global pad hotkeys")
         self.live_hotkeys_enabled_checkbox.setChecked(
             bool(self.app_settings.get("live_voice", {}).get("global_hotkeys_enabled", False))
         )
@@ -1996,10 +1996,8 @@ class LiveVoicePage:
             QMessageBox.warning(self, "Global Stop All hotkey", f"{hotkey} is already assigned to {owner}.")
             return
         settings["stop_hotkey"] = hotkey
-        settings["global_hotkeys_enabled"] = True
         self.live_stop_hotkey_label.setText(hotkey)
         self.save_app_settings()
-        self.live_hotkeys_enabled_checkbox.setChecked(True)
         self.refresh_live_global_hotkeys()
 
     def clear_live_stop_hotkey(self):
@@ -2021,25 +2019,20 @@ class LiveVoicePage:
         self.live_hotkeys.clear()
         errors = []
         settings = self.app_settings.setdefault("live_voice", {})
-        if not bool(settings.get("global_hotkeys_enabled", False)):
-            if hasattr(self, "live_hotkey_status_label"):
-                self.live_hotkey_status_label.setText("Global hotkeys: disabled")
-                self.live_hotkey_status_label.setToolTip(
-                    "Assignments are preserved but no system-wide shortcuts are registered."
-                )
-            return
+        pad_hotkeys_enabled = bool(settings.get("global_hotkeys_enabled", False))
         stop = str(settings.get("stop_hotkey", "") or "").strip()
         if stop:
             error = self.live_hotkeys.register("stop_all", stop)
             if error:
                 errors.append(f"{stop}: {error}")
-        board = self.soundboard_store.active_board()
-        for pad in (board.pads if board is not None else []):
-            if not pad.hotkey:
-                continue
-            error = self.live_hotkeys.register(f"pad:{pad.id}", pad.hotkey)
-            if error:
-                errors.append(f"{pad.label} ({pad.hotkey}): {error}")
+        if pad_hotkeys_enabled:
+            board = self.soundboard_store.active_board()
+            for pad in (board.pads if board is not None else []):
+                if not pad.hotkey:
+                    continue
+                error = self.live_hotkeys.register(f"pad:{pad.id}", pad.hotkey)
+                if error:
+                    errors.append(f"{pad.label} ({pad.hotkey}): {error}")
 
         if not self.live_hotkeys.supported:
             self.live_hotkey_status_label.setText("Global hotkeys: Windows only")
@@ -2051,10 +2044,20 @@ class LiveVoicePage:
             self.live_hotkey_status_label.setToolTip("\n".join(errors))
         else:
             count = self.live_hotkeys.registered_count()
-            self.live_hotkey_status_label.setText(
-                f"Global hotkeys: {count} active" if count else "Global hotkeys: none"
-            )
-            self.live_hotkey_status_label.setToolTip("")
+            if not pad_hotkeys_enabled:
+                self.live_hotkey_status_label.setText(
+                    "Global pad hotkeys: disabled"
+                    + (" · Stop All active" if stop and count else "")
+                )
+                self.live_hotkey_status_label.setToolTip(
+                    "Pad assignments are preserved but not registered. "
+                    "A configured emergency Stop All remains available."
+                )
+            else:
+                self.live_hotkey_status_label.setText(
+                    f"Global hotkeys: {count} active" if count else "Global hotkeys: none"
+                )
+                self.live_hotkey_status_label.setToolTip("")
 
     def handle_live_global_hotkey(self, action_id):
         if action_id == "stop_all":

@@ -791,6 +791,45 @@ class LiveVoicePage:
             self.live_monitor_checkbox.isChecked() and not self.live_voice_busy
         )
 
+    @staticmethod
+    def _estimate_live_item_seconds(text):
+        text = str(text or "").strip()
+        return max(0.5, len(text) / APPROX_SPEECH_CHARS_PER_SECOND) if text else 0.0
+
+    def _live_outstanding_items(self):
+        count = len(self.live_voice_queue)
+        seconds = sum(
+            self._estimate_live_item_seconds(item.get("text", ""))
+            for item in self.live_voice_queue
+        )
+        if self.live_voice_current is not None:
+            count += 1
+            seconds += self._estimate_live_item_seconds(
+                self.live_voice_current.get("text", "")
+            )
+        return count, seconds
+
+    def _enqueue_live_item(self, item):
+        text = str((item or {}).get("text") or "").strip()
+        if not text:
+            return False
+        count, seconds = self._live_outstanding_items()
+        item_seconds = self._estimate_live_item_seconds(text)
+        if count >= MAX_LIVE_QUEUE_ITEMS:
+            self.live_status_label.setText(
+                f"Queue limit reached ({MAX_LIVE_QUEUE_ITEMS} outstanding items)."
+            )
+            return False
+        if seconds + item_seconds > MAX_LIVE_QUEUE_SECONDS:
+            self.live_status_label.setText(
+                "Queue limit reached (about 10 minutes of outstanding speech)."
+            )
+            return False
+        self.live_voice_queue.append(item)
+        self._refresh_live_queue()
+        self.live_stop_all_requested = False
+        return True
+
     def live_route_problem(self):
         profile = self.active_live_route_profile()
         if self.current_live_audio_device() is None:
@@ -817,11 +856,9 @@ class LiveVoicePage:
                 self, "Test route", "The model is busy. Try the route test when generation is idle."
             )
             return
-        self.live_voice_queue.append({"text": "This Voice Thing route test."})
-        self._refresh_live_queue()
-        self.live_stop_all_requested = False
-        if self.live_speech_thread is None:
-            self._live_start_next()
+        if self._enqueue_live_item({"text": "This Voice Thing route test."}):
+            if self.live_speech_thread is None:
+                self._live_start_next()
 
     def _live_generate_kwargs(self):
         return {
@@ -873,10 +910,9 @@ class LiveVoicePage:
             QMessageBox.information(self, "Live Voice route", route_problem)
             return
 
-        self.live_voice_queue.append({"text": text})
+        if not self._enqueue_live_item({"text": text}):
+            return
         self.live_text_input.clear()
-        self._refresh_live_queue()
-        self.live_stop_all_requested = False
         if self.live_speech_thread is None:
             self._live_start_next()
 

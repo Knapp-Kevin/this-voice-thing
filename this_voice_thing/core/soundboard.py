@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import json
 import os
+import shutil
 import uuid
 import wave
 
@@ -35,6 +36,7 @@ class Pad:
     interrupt_policy: str = "queue"
     cache_policy: str = "auto"
     cache_key: str = ""
+    audio_file: str = ""
     hotkey: str = ""
     tags: list = field(default_factory=list)
     created: str = field(default_factory=lambda: datetime.datetime.now().isoformat(timespec="seconds"))
@@ -75,6 +77,7 @@ class SoundboardStore:
         self.app_dir = app_dir
         self.dir = os.path.join(app_dir, SOUNDBOARD_DIRNAME)
         self.cache_dir = os.path.join(self.dir, "cache")
+        self.audio_dir = os.path.join(self.dir, "audio")
         self.index_path = os.path.join(self.dir, INDEX_FILENAME)
         self.boards = []
         self.active_board_id = ""
@@ -102,7 +105,7 @@ class SoundboardStore:
                 if not isinstance(item, dict) or not str(item.get("label", "")).strip():
                     continue
                 filtered = {key: value for key, value in item.items() if key in pad_fields}
-                if filtered.get("kind", "tts") != "tts":
+                if filtered.get("kind", "tts") not in ("tts", "audio"):
                     continue
                 pads.append(Pad(**filtered))
             values = {key: value for key, value in raw.items() if key in board_fields and key != "pads"}
@@ -161,6 +164,34 @@ class SoundboardStore:
         self.save()
         return pad
 
+    def audio_path(self, pad):
+        if pad is None or pad.kind != "audio" or not pad.audio_file:
+            return ""
+        filename = os.path.basename(pad.audio_file)
+        if filename != pad.audio_file:
+            return ""
+        return os.path.join(self.audio_dir, filename)
+
+    def import_audio_pad(self, path, label, board=None):
+        source = os.path.abspath(str(path or ""))
+        if not os.path.isfile(source):
+            raise FileNotFoundError(source)
+        pad = Pad(label=str(label or "").strip() or os.path.basename(source), text="", kind="audio")
+        extension = os.path.splitext(source)[1].lower()
+        filename = f"{pad.id}{extension or '.audio'}"
+        os.makedirs(self.audio_dir, exist_ok=True)
+        destination = os.path.join(self.audio_dir, filename)
+        shutil.copy2(source, destination)
+        pad.audio_file = filename
+        try:
+            return self.add_pad(pad, board)
+        except Exception:
+            try:
+                os.remove(destination)
+            except OSError:
+                pass
+            raise
+
     def remove_pad(self, pad_id):
         removed = None
         for board in self.boards:
@@ -173,6 +204,13 @@ class SoundboardStore:
             board.pads = kept
         self.save()
         if removed is not None:
+            if removed.kind == "audio":
+                audio_path = self.audio_path(removed)
+                if audio_path:
+                    try:
+                        os.remove(audio_path)
+                    except OSError:
+                        pass
             self.garbage_collect_cache()
         return removed
 

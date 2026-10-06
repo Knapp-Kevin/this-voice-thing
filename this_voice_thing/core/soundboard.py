@@ -135,6 +135,60 @@ class SoundboardStore:
             self.active_board_id = board.id
         return board
 
+    def select_board(self, board_id):
+        if any(board.id == board_id for board in self.boards):
+            self.active_board_id = board_id
+            self.save()
+        return self.active_board()
+
+    def add_board(self, name):
+        base = str(name or "").strip() or "Board"
+        existing = {board.name.lower() for board in self.boards}
+        candidate = base
+        number = 2
+        while candidate.lower() in existing:
+            candidate = f"{base} {number}"
+            number += 1
+        board = Board(name=candidate)
+        self.boards.append(board)
+        self.active_board_id = board.id
+        self.save()
+        return board
+
+    def rename_board(self, board_id, name):
+        board = next((board for board in self.boards if board.id == board_id), None)
+        if board is None:
+            return None
+        base = str(name or "").strip()
+        if not base:
+            return board
+        existing = {
+            other.name.lower()
+            for other in self.boards
+            if other.id != board.id
+        }
+        candidate = base
+        number = 2
+        while candidate.lower() in existing:
+            candidate = f"{base} {number}"
+            number += 1
+        board.name = candidate
+        self.save()
+        return board
+
+    def remove_board(self, board_id):
+        if len(self.boards) <= 1:
+            return None
+        removed = next((board for board in self.boards if board.id == board_id), None)
+        if removed is None:
+            return None
+        self.boards = [board for board in self.boards if board.id != board_id]
+        if self.active_board_id == board_id:
+            self.active_board_id = self.boards[0].id
+        self.save()
+        self.garbage_collect_cache()
+        return removed
+
     def get_pad(self, pad_id):
         for board in self.boards:
             for pad in board.pads:

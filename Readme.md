@@ -261,9 +261,10 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Stop current** silences the current utterance immediately and keeps later queued items.
 - **Stop all** discards audible buffered audio and clears the queue.
 - **Repeat last** resubmits the most recent completed line.
-- **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
+- **Soundboard:** save the composer (or last spoken line) as a named TTS pad, or import a local audio clip. Double-click or Trigger any pad to play it.
 - **Windows global hotkeys:** assign a modifier shortcut to any soundboard pad so it can fire while Discord, Zoom, a game or another app has focus. Live Voice also has an independent global **Stop All** shortcut.
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
+- **Audio clip pads** copy supported local audio into `soundboard/audio/` so the board does not depend on the original Downloads/Desktop path. Clips stream through the same PCM route, monitoring, Stop and hotkey behavior as generated speech and do not require a TTS model. WAV, FLAC, OGG, MP3 and AIFF are offered by the picker; actual decoding follows the installed libsndfile/soundfile support.
 - Global shortcuts use the Windows `RegisterHotKey` API rather than a low-level keyboard hook. They require Ctrl, Alt or Shift plus one supported key, reject Windows-reserved F12/Win-key combinations, use no-repeat behavior, and report OS/application conflicts instead of silently stealing a shortcut.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.
@@ -595,7 +596,7 @@ this-voice-thing/
 │  │  ├─ worker.py              shared worker/environment support for the other engines
 │  │  └─ qwen.py, kokoro.py, voxcpm.py, omnivoice.py, vibevoice.py
 │  ├─ core/
-│  │  ├─ live_voice.py          shared live/cached speech sessions and typed PCM AudioFrame
+│  │  ├─ live_voice.py          shared live/cached/audio-file speech sessions and typed PCM AudioFrame
 │  │  ├─ live_routes.py         persistent route profiles and virtual-device hints
 │  │  ├─ soundboard.py          persistent boards/pads and content-addressed local WAV cache
 │  │  ├─ model_registry.py      engines, capabilities, licenses, hardware needs, Hugging Face discovery

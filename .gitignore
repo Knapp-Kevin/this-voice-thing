@@ -79,3 +79,7 @@ pronunciations.json
 
 # Google sign-in (OAuth client and tokens) for Google Docs import
 google_auth.json
+
+# Isolated RVC feasibility environment/source checkout
+/engines/rvc/upstream/
+/engines/rvc/requirements-this-voice-thing.txt

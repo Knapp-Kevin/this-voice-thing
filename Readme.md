@@ -262,7 +262,9 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Stop all** discards audible buffered audio and clears the queue.
 - **Repeat last** resubmits the most recent completed line.
 - **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
+- **Windows global hotkeys:** assign a modifier shortcut to any soundboard pad so it can fire while Discord, Zoom, a game or another app has focus. Live Voice also has an independent global **Stop All** shortcut.
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
+- Global shortcuts use the Windows `RegisterHotKey` API rather than a low-level keyboard hook. They require Ctrl, Alt or Shift plus one supported key, reject Windows-reserved F12/Win-key combinations, use no-repeat behavior, and report OS/application conflicts instead of silently stealing a shortcut.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.
 - Choose a **Route**: **Local output**, **External / virtual microphone**, **Discord**, **Zoom**, **OBS**, or **Other app**. Each profile remembers its own primary output and optional monitor device.
@@ -582,6 +584,7 @@ this-voice-thing/
 │  │  ├─ dialogs/               recording, find/add models, voices and cast, pronunciation, Google Docs
 │  │  ├─ threads.py             model loading, generation, installs, speech and transcription threads
 │  │  ├─ live_audio.py          QAudioSink streaming playback, buffering and sample-rate conversion
+│  │  ├─ global_hotkeys.py      Windows RegisterHotKey manager for pads and Stop All
 │  │  ├─ api_bridge.py          hands local API requests to the window
 │  │  ├─ common.py              start-up setup, model config and shared constants
 │  │  ├─ widgets.py             small reusable widgets

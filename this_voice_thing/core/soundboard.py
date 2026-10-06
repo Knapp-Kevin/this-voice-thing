@@ -139,6 +139,72 @@ class SoundboardStore:
             self.active_board_id = board.id
         return board
 
+    def get_board(self, board_id):
+        return next((board for board in self.boards if board.id == board_id), None)
+
+    def _unique_board_name(self, name, exclude_id=None):
+        base = str(name or "").strip() or "Board"
+        existing = {
+            board.name.lower()
+            for board in self.boards
+            if board.id != exclude_id
+        }
+        candidate = base
+        number = 2
+        while candidate.lower() in existing:
+            candidate = f"{base} {number}"
+            number += 1
+        return candidate
+
+    def create_board(self, name):
+        board = Board(name=self._unique_board_name(name))
+        self.boards.append(board)
+        self.active_board_id = board.id
+        self.save()
+        return board
+
+    def select_board(self, board_id):
+        board = self.get_board(board_id)
+        if board is None:
+            return None
+        self.active_board_id = board.id
+        self.save()
+        return board
+
+    def rename_board(self, board_id, name):
+        board = self.get_board(board_id)
+        if board is None:
+            return None
+        board.name = self._unique_board_name(name, exclude_id=board.id)
+        self.save()
+        return board
+
+    def _delete_owned_audio(self, pad):
+        if pad is None or pad.kind != "audio":
+            return
+        audio_path = self.audio_path(pad)
+        if not audio_path:
+            return
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
+
+    def remove_board(self, board_id):
+        if len(self.boards) <= 1:
+            raise ValueError("The last soundboard cannot be deleted.")
+        board = self.get_board(board_id)
+        if board is None:
+            return None
+        for pad in board.pads:
+            self._delete_owned_audio(pad)
+        self.boards = [item for item in self.boards if item.id != board.id]
+        if self.active_board_id == board.id:
+            self.active_board_id = self.boards[0].id
+        self.save()
+        self.garbage_collect_cache()
+        return board
+
     def get_pad(self, pad_id):
         for board in self.boards:
             for pad in board.pads:
@@ -204,13 +270,7 @@ class SoundboardStore:
             board.pads = kept
         self.save()
         if removed is not None:
-            if removed.kind == "audio":
-                audio_path = self.audio_path(removed)
-                if audio_path:
-                    try:
-                        os.remove(audio_path)
-                    except OSError:
-                        pass
+            self._delete_owned_audio(removed)
             self.garbage_collect_cache()
         return removed
 

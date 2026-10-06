@@ -46,6 +46,50 @@ class SoundboardStoreTests(unittest.TestCase):
 
         self.assertNotEqual(a, b)
 
+    def test_multiple_boards_persist_active_selection(self):
+        second = self.store.add_board("Work")
+        self.store.add_pad(Pad(label="Meeting", text="One moment."), board=second)
+
+        reloaded = SoundboardStore(self.temp.name)
+
+        self.assertEqual(reloaded.active_board().name, "Work")
+        self.assertEqual(len(reloaded.active_board().pads), 1)
+        self.assertEqual(reloaded.active_board().pads[0].label, "Meeting")
+
+    def test_duplicate_board_names_are_made_unique(self):
+        first = self.store.add_board("Games")
+        second = self.store.add_board("Games")
+
+        self.assertEqual(first.name, "Games")
+        self.assertEqual(second.name, "Games 2")
+
+    def test_rename_board_remains_unique(self):
+        first = self.store.add_board("Work")
+        second = self.store.add_board("Games")
+
+        renamed = self.store.rename_board(second.id, "Work")
+
+        self.assertEqual(renamed.name, "Work 2")
+        self.assertEqual(first.name, "Work")
+
+    def test_cannot_delete_last_board(self):
+        only = self.store.active_board()
+
+        removed = self.store.remove_board(only.id)
+
+        self.assertIsNone(removed)
+        self.assertEqual(len(self.store.boards), 1)
+
+    def test_deleting_active_board_selects_remaining_board(self):
+        original = self.store.active_board()
+        second = self.store.add_board("Second")
+        self.assertEqual(self.store.active_board_id, second.id)
+
+        removed = self.store.remove_board(second.id)
+
+        self.assertEqual(removed.id, second.id)
+        self.assertEqual(self.store.active_board_id, original.id)
+
     def test_pcm_cache_is_valid_wav(self):
         pad = Pad(label="Test", text="Hello.")
         key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})

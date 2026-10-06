@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,9 +25,11 @@ from PySide6.QtWidgets import (
 
 from this_voice_thing.core import live_routes, soundboard, voice_library
 from this_voice_thing.core.live_voice import AudioFileSpeechSession, CachedSpeechSession, LiveSpeechSession
+from this_voice_thing.core.microphone_audio import MicrophoneEffectsConfig
 from this_voice_thing.engines import vibevoice as vibevoice_engine
 from this_voice_thing.ui.global_hotkeys import GlobalHotkeyManager, HotkeyError, normalize_hotkey
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
+from this_voice_thing.ui.live_capture import LiveAudioInput
 from this_voice_thing.ui import theme as ui_theme
 
 
@@ -57,6 +60,11 @@ class LiveVoicePage:
         self.live_external_armed = False
         self.live_board_defaults_applied = False
 
+        self.live_mic_input = LiveAudioInput(self)
+        self.live_mic_input.frame_ready.connect(self.on_live_mic_frame)
+        self.live_mic_input.failed.connect(self.on_live_mic_error)
+        self.live_mic_input.stopped.connect(self.on_live_mic_stopped)
+
         self.live_audio_output = LiveAudioOutput(self)
         self.live_audio_output.failed.connect(self.on_live_audio_error)
         self.live_audio_output.drained.connect(self.on_live_audio_drained)
@@ -70,7 +78,7 @@ class LiveVoicePage:
 
         page, layout = self._make_page(
             "Live Voice",
-            "Type, speak, queue, and route the current voice directly to an audio device.",
+            "Type text or use a microphone, then route the audio directly to an output device.",
         )
 
         route_card, route_layout = self._make_card("Voice & route")
@@ -173,7 +181,69 @@ class LiveVoicePage:
         self.live_monitor_status.setObjectName("Muted")
         monitor_row.addWidget(self.live_monitor_status)
         route_layout.addLayout(monitor_row)
+
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel("Source"))
+        self.live_source_mode_combo = QComboBox()
+        self.live_source_mode_combo.addItem("Live Speak", "tts")
+        self.live_source_mode_combo.addItem("Mic Effects", "mic_effects")
+        self.live_source_mode_combo.currentIndexChanged.connect(
+            self.on_live_source_mode_changed
+        )
+        source_row.addWidget(self.live_source_mode_combo)
+        source_row.addStretch(1)
+        route_layout.addLayout(source_row)
         layout.addWidget(route_card)
+
+        mic_card, mic_layout = self._make_card("Mic Effects")
+        mic_input_row = QHBoxLayout()
+        mic_input_row.addWidget(QLabel("Microphone"))
+        self.live_mic_input_combo = QComboBox()
+        self.live_mic_input_combo.setMinimumWidth(320)
+        self.live_mic_input_combo.currentIndexChanged.connect(
+            self.on_live_mic_input_changed
+        )
+        mic_input_row.addWidget(self.live_mic_input_combo, 1)
+        refresh_mics = self._link(QPushButton("Refresh devices"))
+        refresh_mics.clicked.connect(self.refresh_live_audio_devices)
+        mic_input_row.addWidget(refresh_mics)
+        self.live_mic_start_button = self._accent(QPushButton("Start microphone"))
+        self.live_mic_start_button.clicked.connect(self.toggle_live_microphone)
+        mic_input_row.addWidget(self.live_mic_start_button)
+        mic_layout.addLayout(mic_input_row)
+
+        effects_row = QHBoxLayout()
+        self.live_mic_effects_enabled = QCheckBox("Enable effects")
+        self.live_mic_effects_enabled.setChecked(True)
+        effects_row.addWidget(self.live_mic_effects_enabled)
+
+        effects_row.addWidget(QLabel("Gain dB"))
+        self.live_mic_gain = QDoubleSpinBox()
+        self.live_mic_gain.setRange(-24.0, 24.0)
+        self.live_mic_gain.setDecimals(1)
+        self.live_mic_gain.setSingleStep(1.0)
+        self.live_mic_gain.setValue(0.0)
+        effects_row.addWidget(self.live_mic_gain)
+
+        effects_row.addWidget(QLabel("Tone"))
+        self.live_mic_tone = QDoubleSpinBox()
+        self.live_mic_tone.setRange(-1.0, 1.0)
+        self.live_mic_tone.setDecimals(2)
+        self.live_mic_tone.setSingleStep(0.1)
+        self.live_mic_tone.setValue(0.0)
+        self.live_mic_tone.setToolTip("-1 warmer/darker · +1 brighter")
+        effects_row.addWidget(self.live_mic_tone)
+
+        self.live_mic_compressor = QCheckBox("Compressor")
+        self.live_mic_compressor.setChecked(True)
+        effects_row.addWidget(self.live_mic_compressor)
+
+        effects_row.addStretch(1)
+        self.live_mic_status_label = QLabel("Microphone stopped")
+        self.live_mic_status_label.setObjectName("Muted")
+        effects_row.addWidget(self.live_mic_status_label)
+        mic_layout.addLayout(effects_row)
+        layout.addWidget(mic_card)
 
         speak_card, speak_layout = self._make_card("Live Speak")
         self.live_text_input = QPlainTextEdit()
@@ -408,6 +478,7 @@ class LiveVoicePage:
         self.refresh_soundboard_board_defaults()
         self.refresh_live_global_hotkeys()
         self.update_live_route_state()
+        self.on_live_source_mode_changed(self.live_source_mode_combo.currentIndex())
 
     def _add_live_shortcut(self, page, sequence, callback):
         shortcut = QShortcut(QKeySequence(sequence), page)

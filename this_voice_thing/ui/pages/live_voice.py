@@ -1,6 +1,9 @@
 """Live Voice page: type text and send generated PCM directly to an audio device."""
 
 import json
+import os
+
+import soundfile as sf
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -8,18 +11,21 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QMessageBox,
     QInputDialog,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
 )
 
 from this_voice_thing.core import live_routes, soundboard, voice_library
-from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
+from this_voice_thing.core.live_voice import AudioFileSpeechSession, CachedSpeechSession, LiveSpeechSession
 from this_voice_thing.engines import vibevoice as vibevoice_engine
+from this_voice_thing.ui.global_hotkeys import GlobalHotkeyManager, HotkeyError, normalize_hotkey
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
 from this_voice_thing.ui import theme as ui_theme
 
@@ -47,7 +53,9 @@ class LiveVoicePage:
         self.live_route_store = live_routes.RouteProfileStore(
             self.app_settings.setdefault("live_voice", {})
         )
+        self.live_hotkeys = GlobalHotkeyManager(self)
         self.live_external_armed = False
+        self.live_board_defaults_applied = False
 
         self.live_audio_output = LiveAudioOutput(self)
         self.live_audio_output.failed.connect(self.on_live_audio_error)
@@ -92,6 +100,21 @@ class LiveVoicePage:
         self.live_provenance_label.setObjectName("Muted")
         voice_row.addWidget(self.live_provenance_label)
         route_layout.addLayout(voice_row)
+
+        favorite_voice_row = QHBoxLayout()
+        favorite_voice_row.addWidget(QLabel("Quick voices"))
+        self.live_favorite_voice_combo = QComboBox()
+        favorite_voice_row.addWidget(self.live_favorite_voice_combo, 1)
+        use_favorite_voice = QPushButton("Use")
+        use_favorite_voice.clicked.connect(self.use_selected_favorite_voice)
+        favorite_voice_row.addWidget(use_favorite_voice)
+        favorite_current_voice = self._link(QPushButton("Favorite current"))
+        favorite_current_voice.clicked.connect(self.favorite_current_live_voice)
+        favorite_voice_row.addWidget(favorite_current_voice)
+        remove_favorite_voice = self._link(QPushButton("Remove favorite"))
+        remove_favorite_voice.clicked.connect(self.remove_selected_favorite_voice)
+        favorite_voice_row.addWidget(remove_favorite_voice)
+        route_layout.addLayout(favorite_voice_row)
 
         profile_row = QHBoxLayout()
         profile_row.addWidget(QLabel("Route"))
@@ -216,21 +239,64 @@ class LiveVoicePage:
         layout.addWidget(queue_card, 1)
 
         board_card, board_layout = self._make_card("Soundboard")
-        board_header = QHBoxLayout()
-        board_header.addWidget(QLabel("Board"))
+        board_picker_row = QHBoxLayout()
+        board_picker_row.addWidget(QLabel("Board"))
         self.soundboard_board_combo = QComboBox()
+        self.soundboard_board_combo.setMinimumWidth(220)
         self.soundboard_board_combo.currentIndexChanged.connect(self.on_soundboard_board_changed)
-        board_header.addWidget(self.soundboard_board_combo, 1)
-        new_board = self._link(QPushButton("New"))
+        board_picker_row.addWidget(self.soundboard_board_combo, 1)
+        new_board = QPushButton("New…")
         new_board.clicked.connect(self.create_soundboard_board)
-        board_header.addWidget(new_board)
-        rename_board = self._link(QPushButton("Rename"))
+        board_picker_row.addWidget(new_board)
+        rename_board = QPushButton("Rename…")
         rename_board.clicked.connect(self.rename_soundboard_board)
-        board_header.addWidget(rename_board)
-        self.soundboard_delete_board_button = self._link(QPushButton("Delete board"))
-        self.soundboard_delete_board_button.clicked.connect(self.delete_soundboard_board)
-        board_header.addWidget(self.soundboard_delete_board_button)
-        board_layout.addLayout(board_header)
+        board_picker_row.addWidget(rename_board)
+        delete_board = self._link(QPushButton("Delete board"))
+        delete_board.clicked.connect(self.delete_soundboard_board)
+        board_picker_row.addWidget(delete_board)
+        board_layout.addLayout(board_picker_row)
+
+        defaults_row = QHBoxLayout()
+        defaults_row.addWidget(QLabel("Board defaults"))
+        self.soundboard_defaults_label = QLabel("Voice: none · Route: none")
+        self.soundboard_defaults_label.setObjectName("Muted")
+        defaults_row.addWidget(self.soundboard_defaults_label, 1)
+        save_voice_default = QPushButton("Use current voice")
+        save_voice_default.clicked.connect(self.set_soundboard_default_voice)
+        defaults_row.addWidget(save_voice_default)
+        clear_voice_default = self._link(QPushButton("Clear voice"))
+        clear_voice_default.clicked.connect(self.clear_soundboard_default_voice)
+        defaults_row.addWidget(clear_voice_default)
+        save_route_default = QPushButton("Use current route")
+        save_route_default.clicked.connect(self.set_soundboard_default_route)
+        defaults_row.addWidget(save_route_default)
+        clear_route_default = self._link(QPushButton("Clear route"))
+        clear_route_default.clicked.connect(self.clear_soundboard_default_route)
+        defaults_row.addWidget(clear_route_default)
+        board_layout.addLayout(defaults_row)
+
+        policy_row = QHBoxLayout()
+        policy_row.addWidget(QLabel("Default pad behavior"))
+        self.soundboard_board_policy_combo = QComboBox()
+        self.soundboard_board_policy_combo.addItem("Queue", "queue")
+        self.soundboard_board_policy_combo.addItem("Interrupt current", "interrupt")
+        self.soundboard_board_policy_combo.addItem("Ignore if busy", "ignore")
+        self.soundboard_board_policy_combo.currentIndexChanged.connect(
+            self.on_soundboard_board_policy_changed
+        )
+        policy_row.addWidget(self.soundboard_board_policy_combo)
+        policy_row.addStretch(1)
+        board_layout.addLayout(policy_row)
+
+        filter_row = QHBoxLayout()
+        self.soundboard_search_input = QLineEdit()
+        self.soundboard_search_input.setPlaceholderText("Search pads by name, phrase, or tag…")
+        self.soundboard_search_input.textChanged.connect(lambda _text: self.refresh_soundboard())
+        filter_row.addWidget(self.soundboard_search_input, 1)
+        self.soundboard_favorites_only = QCheckBox("Favorites only")
+        self.soundboard_favorites_only.toggled.connect(lambda _checked: self.refresh_soundboard())
+        filter_row.addWidget(self.soundboard_favorites_only)
+        board_layout.addLayout(filter_row)
 
         self.soundboard_list = QListWidget()
         self.soundboard_list.setMinimumHeight(130)
@@ -240,12 +306,36 @@ class LiveVoicePage:
         save_pad = self._accent(QPushButton("Save text as pad"))
         save_pad.clicked.connect(self.save_soundboard_pad)
         board_actions.addWidget(save_pad)
+        add_audio_pad = QPushButton("Add audio clip…")
+        add_audio_pad.clicked.connect(self.add_soundboard_audio_pad)
+        board_actions.addWidget(add_audio_pad)
         trigger_pad = QPushButton("Trigger")
         trigger_pad.clicked.connect(self.trigger_selected_soundboard_pad)
         board_actions.addWidget(trigger_pad)
         delete_pad = self._link(QPushButton("Delete"))
         delete_pad.clicked.connect(self.delete_selected_soundboard_pad)
         board_actions.addWidget(delete_pad)
+        move_pad_up = self._link(QPushButton("Move up"))
+        move_pad_up.clicked.connect(lambda: self.move_selected_soundboard_pad(-1))
+        board_actions.addWidget(move_pad_up)
+        move_pad_down = self._link(QPushButton("Move down"))
+        move_pad_down.clicked.connect(lambda: self.move_selected_soundboard_pad(1))
+        board_actions.addWidget(move_pad_down)
+        set_hotkey = QPushButton("Set hotkey…")
+        set_hotkey.clicked.connect(self.set_selected_soundboard_hotkey)
+        board_actions.addWidget(set_hotkey)
+        clear_hotkey = self._link(QPushButton("Clear hotkey"))
+        clear_hotkey.clicked.connect(self.clear_selected_soundboard_hotkey)
+        board_actions.addWidget(clear_hotkey)
+        favorite_pad = self._link(QPushButton("Favorite"))
+        favorite_pad.clicked.connect(self.toggle_selected_soundboard_favorite)
+        board_actions.addWidget(favorite_pad)
+        tags_pad = self._link(QPushButton("Tags…"))
+        tags_pad.clicked.connect(self.edit_selected_soundboard_tags)
+        board_actions.addWidget(tags_pad)
+        behavior_pad = self._link(QPushButton("Behavior…"))
+        behavior_pad.clicked.connect(self.set_selected_soundboard_behavior)
+        board_actions.addWidget(behavior_pad)
         clear_cache = self._link(QPushButton("Clear cache"))
         clear_cache.clicked.connect(self.clear_soundboard_cache)
         board_actions.addWidget(clear_cache)
@@ -254,6 +344,31 @@ class LiveVoicePage:
         self.soundboard_status_label.setObjectName("Muted")
         board_actions.addWidget(self.soundboard_status_label)
         board_layout.addLayout(board_actions)
+
+        hotkey_row = QHBoxLayout()
+        self.live_hotkeys_enabled_checkbox = QCheckBox("Enable global pad hotkeys")
+        self.live_hotkeys_enabled_checkbox.setChecked(
+            bool(self.app_settings.get("live_voice", {}).get("global_hotkeys_enabled", False))
+        )
+        self.live_hotkeys_enabled_checkbox.toggled.connect(self.on_live_global_hotkeys_toggled)
+        hotkey_row.addWidget(self.live_hotkeys_enabled_checkbox)
+        hotkey_row.addWidget(QLabel("Global Stop All"))
+        self.live_stop_hotkey_label = QLabel(
+            self.app_settings.get("live_voice", {}).get("stop_hotkey", "") or "Not set"
+        )
+        self.live_stop_hotkey_label.setObjectName("Muted")
+        hotkey_row.addWidget(self.live_stop_hotkey_label)
+        set_stop_hotkey = QPushButton("Set…")
+        set_stop_hotkey.clicked.connect(self.set_live_stop_hotkey)
+        hotkey_row.addWidget(set_stop_hotkey)
+        clear_stop_hotkey = self._link(QPushButton("Clear"))
+        clear_stop_hotkey.clicked.connect(self.clear_live_stop_hotkey)
+        hotkey_row.addWidget(clear_stop_hotkey)
+        hotkey_row.addStretch(1)
+        self.live_hotkey_status_label = QLabel("")
+        self.live_hotkey_status_label.setObjectName("Muted")
+        hotkey_row.addWidget(self.live_hotkey_status_label)
+        board_layout.addLayout(hotkey_row)
         layout.addWidget(board_card, 1)
 
         self.live_voice_shortcuts = []
@@ -265,6 +380,8 @@ class LiveVoicePage:
         self._add_live_shortcut(page, "Delete", self.live_remove_selected_queue_item)
         self._add_live_shortcut(page, "Alt+Up", lambda: self.live_move_selected_queue_item(-1))
         self._add_live_shortcut(page, "Alt+Down", lambda: self.live_move_selected_queue_item(1))
+        self._add_live_shortcut(page, "Ctrl+Shift+Up", lambda: self.move_selected_soundboard_pad(-1))
+        self._add_live_shortcut(page, "Ctrl+Shift+Down", lambda: self.move_selected_soundboard_pad(1))
         for number in range(1, 10):
             self._add_live_shortcut(
                 page,
@@ -285,8 +402,11 @@ class LiveVoicePage:
             pass
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
+        self.refresh_live_voice_favorites()
         self.refresh_soundboard_boards()
         self.refresh_soundboard()
+        self.refresh_soundboard_board_defaults()
+        self.refresh_live_global_hotkeys()
         self.update_live_route_state()
 
     def _add_live_shortcut(self, page, sequence, callback):
@@ -325,11 +445,73 @@ class LiveVoicePage:
         else:
             mode = "Buffered fallback"
         self.live_mode_label.setText(mode)
-        if voice is None:
-            origin = "default / current"
+        if hasattr(self, "live_voice_origin_label"):
+            origin = (voice.origin or voice.kind) if voice is not None else "default / current"
+            self.live_voice_origin_label.setText(f"Origin: {origin}")
+        if hasattr(self, "live_favorite_voice_combo"):
+            self.refresh_live_voice_favorites()
+
+    def refresh_live_voice_favorites(self):
+        if not hasattr(self, "live_favorite_voice_combo"):
+            return
+        settings = self.app_settings.setdefault("live_voice", {})
+        saved = list(settings.get("favorite_voice_ids", []) or [])
+        voices = {voice.id: voice for voice in self.voice_library.voices}
+        valid = [voice_id for voice_id in saved if voice_id in voices]
+        if valid != saved:
+            settings["favorite_voice_ids"] = valid
+            self.save_app_settings()
+        current = self.live_favorite_voice_combo.currentData()
+        self.live_favorite_voice_combo.blockSignals(True)
+        self.live_favorite_voice_combo.clear()
+        if not valid:
+            self.live_favorite_voice_combo.addItem("No favorite voices yet", None)
         else:
-            origin = voice.origin or voice.kind
-        self.live_voice_origin_label.setText(f"Origin: {origin}")
+            for voice_id in valid:
+                voice = voices[voice_id]
+                self.live_favorite_voice_combo.addItem(voice.name, voice.id)
+        preferred = self.active_voice_id if self.active_voice_id in valid else current
+        index = self.live_favorite_voice_combo.findData(preferred)
+        if index >= 0:
+            self.live_favorite_voice_combo.setCurrentIndex(index)
+        self.live_favorite_voice_combo.blockSignals(False)
+
+    def favorite_current_live_voice(self):
+        voice = self.voice_library.get(self.active_voice_id) if self.active_voice_id else None
+        if voice is None:
+            QMessageBox.information(
+                self, "Quick voices", "Choose one of your saved voices before favoriting it."
+            )
+            return
+        settings = self.app_settings.setdefault("live_voice", {})
+        favorites = list(settings.get("favorite_voice_ids", []) or [])
+        if voice.id not in favorites:
+            favorites.append(voice.id)
+            settings["favorite_voice_ids"] = favorites
+            self.save_app_settings()
+        self.refresh_live_voice_favorites()
+        index = self.live_favorite_voice_combo.findData(voice.id)
+        if index >= 0:
+            self.live_favorite_voice_combo.setCurrentIndex(index)
+        self.live_status_label.setText(f"Quick voice saved: {voice.name}")
+
+    def remove_selected_favorite_voice(self):
+        voice_id = self.live_favorite_voice_combo.currentData()
+        if not voice_id:
+            return
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["favorite_voice_ids"] = [
+            item for item in list(settings.get("favorite_voice_ids", []) or [])
+            if item != voice_id
+        ]
+        self.save_app_settings()
+        self.refresh_live_voice_favorites()
+
+    def use_selected_favorite_voice(self):
+        voice_id = self.live_favorite_voice_combo.currentData()
+        voice = self.voice_library.get(voice_id) if voice_id else None
+        if voice is not None:
+            self.use_voice(voice)
 
     @staticmethod
     def _device_id_hex(device):
@@ -621,18 +803,27 @@ class LiveVoicePage:
 
     def _live_outstanding_items(self):
         count = len(self.live_voice_queue)
-        seconds = sum(self._estimate_live_item_seconds(item.get("text", "")) for item in self.live_voice_queue)
+        seconds = sum(
+            float(item.get("estimated_seconds") or self._estimate_live_item_seconds(item.get("text", "")))
+            for item in self.live_voice_queue
+        )
         if self.live_voice_current is not None:
             count += 1
-            seconds += self._estimate_live_item_seconds(self.live_voice_current.get("text", ""))
+            seconds += float(
+                self.live_voice_current.get("estimated_seconds")
+                or self._estimate_live_item_seconds(self.live_voice_current.get("text", ""))
+            )
         return count, seconds
 
     def _enqueue_live_item(self, item):
-        text = str(item.get("text") or "").strip()
+        text = str((item or {}).get("text") or "").strip()
         if not text:
             return False
         count, seconds = self._live_outstanding_items()
-        item_seconds = self._estimate_live_item_seconds(text)
+        item_seconds = float(
+            item.get("estimated_seconds")
+            or self._estimate_live_item_seconds(text)
+        )
         if count >= MAX_LIVE_QUEUE_ITEMS:
             self.live_status_label.setText(
                 f"Queue limit reached ({MAX_LIVE_QUEUE_ITEMS} outstanding items)."
@@ -751,7 +942,9 @@ class LiveVoicePage:
         self.live_voice_last_error = ""
         self._refresh_live_queue()
         try:
-            if item.get("cached_path"):
+            if item.get("audio_path"):
+                session = AudioFileSpeechSession(item["audio_path"], item.get("label") or "Soundboard audio")
+            elif item.get("cached_path"):
                 session = CachedSpeechSession(
                     item["cached_path"],
                     item.get("label") or "Soundboard",
@@ -821,7 +1014,9 @@ class LiveVoicePage:
                 "native": "Native streaming",
                 "segmented": "Segmented streaming",
                 "cached": "Cached playback",
-            }.get(mode, "Buffered fallback")
+                "audio": "Audio clip",
+                "buffered": "Buffered fallback",
+            }.get(mode, mode.replace("_", " ").title())
         )
         provenance = str(meta.get("provenance") or "")
         provenance_labels = {
@@ -829,6 +1024,7 @@ class LiveVoicePage:
             "live-segmented-engine-watermark": "Provenance: segmented live · engine watermark applied",
             "buffered-engine-default": "Provenance: buffered · engine/default policy",
             "soundboard-cache-unknown": "Provenance: cached · original watermark state unknown",
+            "soundboard-audio-file": "Provenance: local audio clip · source file",
         }
         if mode == "cached":
             cached_labels = {
@@ -842,7 +1038,10 @@ class LiveVoicePage:
                     "Provenance: cached · original watermark state unknown",
             }
             self.live_provenance_label.setText(
-                cached_labels.get(provenance, f"Provenance: cached source · {provenance or 'unknown'}")
+                cached_labels.get(
+                    provenance,
+                    f"Provenance: cached source · {provenance or 'unknown'}",
+                )
             )
         elif provenance in provenance_labels:
             self.live_provenance_label.setText(provenance_labels[provenance])
@@ -850,8 +1049,9 @@ class LiveVoicePage:
             self.live_provenance_label.setText(f"Provenance: {provenance}")
         else:
             self.live_provenance_label.setText("Provenance: unavailable")
+        verb = "Playing" if mode in ("cached", "audio") else "Generating"
         self.live_status_label.setText(
-            f"Generating · {mode} · {device.description()}"
+            f"{verb} · {mode} · {device.description()}"
         )
 
     def on_live_frame(self, frame):
@@ -872,11 +1072,12 @@ class LiveVoicePage:
     def on_live_session_complete(self, metrics):
         self.live_last_generation_metrics = dict(metrics)
         if not metrics.get("cancelled") and self.live_voice_current:
-            self.live_voice_history.append({
-                "text": self.live_voice_current["text"],
-                "metrics": dict(metrics),
-            })
-            self.live_voice_history = self.live_voice_history[-50:]
+            if not self.live_voice_current.get("audio_path"):
+                self.live_voice_history.append({
+                    "text": self.live_voice_current["text"],
+                    "metrics": dict(metrics),
+                })
+                self.live_voice_history = self.live_voice_history[-50:]
             cache_key = self.live_voice_current.get("cache_key")
             pcm = self.live_voice_current.get("_cache_pcm")
             sample_rate = self.live_voice_current.get("_cache_sample_rate")
@@ -1029,16 +1230,18 @@ class LiveVoicePage:
         self.live_queue_list.setCurrentRow(target)
         self.live_status_label.setText("Queued speech reordered.")
 
-    def live_clear_queue(self):
-        self.live_voice_queue.clear()
-        self._refresh_live_queue()
-
     def live_clear_history(self):
         count = len(self.live_voice_history)
         self.live_voice_history.clear()
         self.live_status_label.setText(
-            f"Cleared {count} session-history item(s)." if count else "Session history is already empty."
+            f"Cleared {count} session-history item(s)."
+            if count
+            else "Session history is already empty."
         )
+
+    def live_clear_queue(self):
+        self.live_voice_queue.clear()
+        self._refresh_live_queue()
 
     def live_repeat_last(self):
         if not self.live_voice_history:
@@ -1092,97 +1295,8 @@ class LiveVoicePage:
             repetition_penalty=float(self.repetition_penalty),
             min_p=float(self.min_p),
             top_p=float(self.top_p),
+            interrupt_policy="",
         )
-
-    def clear_soundboard_cache(self):
-        answer = QMessageBox.question(
-            self,
-            "Clear soundboard cache",
-            "Delete all cached soundboard audio? Pads and boards will remain, but static TTS pads "
-            "will need to be generated again before they can play without the model.",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        removed = self.soundboard_store.clear_cache()
-        self.refresh_soundboard()
-        self.soundboard_status_label.setText(f"Cleared {removed} cached audio file(s).")
-
-    def refresh_soundboard_boards(self, select_id=None):
-        if not hasattr(self, "soundboard_board_combo"):
-            return
-        selected = select_id or self.soundboard_store.active_board_id
-        self.soundboard_board_combo.blockSignals(True)
-        self.soundboard_board_combo.clear()
-        for index, board in enumerate(self.soundboard_store.boards, 1):
-            shortcut = f"Ctrl+Alt+{index}" if index <= 9 else ""
-            label = f"{board.name}  [{shortcut}]" if shortcut else board.name
-            self.soundboard_board_combo.addItem(label, board.id)
-        idx = self.soundboard_board_combo.findData(selected)
-        self.soundboard_board_combo.setCurrentIndex(max(0, idx))
-        self.soundboard_board_combo.blockSignals(False)
-        self.soundboard_delete_board_button.setEnabled(len(self.soundboard_store.boards) > 1)
-
-    def on_soundboard_board_changed(self, _index):
-        board_id = self.soundboard_board_combo.currentData()
-        if not board_id:
-            return
-        self.soundboard_store.select_board(str(board_id))
-        self.refresh_soundboard()
-
-    def create_soundboard_board(self):
-        name, accepted = QInputDialog.getText(self, "New soundboard", "Board name:", text="New board")
-        if not accepted or not name.strip():
-            return
-        board = self.soundboard_store.add_board(name.strip())
-        self.refresh_soundboard_boards(select_id=board.id)
-        self.refresh_soundboard()
-        self.soundboard_status_label.setText(f"Created board: {board.name}")
-
-    def rename_soundboard_board(self):
-        board = self.soundboard_store.active_board()
-        if board is None:
-            return
-        name, accepted = QInputDialog.getText(
-            self, "Rename soundboard", "Board name:", text=board.name
-        )
-        if not accepted or not name.strip():
-            return
-        board = self.soundboard_store.rename_board(board.id, name.strip())
-        self.refresh_soundboard_boards(select_id=board.id)
-        self.soundboard_status_label.setText(f"Renamed board: {board.name}")
-
-    def delete_soundboard_board(self):
-        board = self.soundboard_store.active_board()
-        if board is None or len(self.soundboard_store.boards) <= 1:
-            return
-        answer = QMessageBox.question(
-            self,
-            "Delete soundboard",
-            f"Delete the board '{board.name}' and all {len(board.pads)} pad(s) on it? "
-            "Cached audio no longer used by another board will also be removed.",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-        removed = self.soundboard_store.remove_board(board.id)
-        if removed is not None:
-            self.refresh_soundboard_boards()
-            self.refresh_soundboard()
-            self.soundboard_status_label.setText(f"Deleted board: {removed.name}")
-
-    def select_soundboard_board_index(self, index):
-        if not (0 <= index < len(self.soundboard_store.boards)):
-            return
-        board = self.soundboard_store.boards[index]
-        self.soundboard_store.select_board(board.id)
-        self.refresh_soundboard_boards(select_id=board.id)
-        self.refresh_soundboard()
-        self.soundboard_status_label.setText(f"Board: {board.name}")
-
-    def trigger_soundboard_pad_index(self, index):
-        board = self.soundboard_store.active_board()
-        if board is None or not (0 <= index < len(board.pads)):
-            return
-        self._queue_soundboard_pad(board.pads[index])
 
     def save_soundboard_pad(self):
         text = self.live_text_input.toPlainText().strip()
@@ -1196,6 +1310,7 @@ class LiveVoicePage:
         if not accepted or not label.strip():
             return
         pad = self.soundboard_store.add_pad(self._current_soundboard_pad(label.strip(), text))
+        self.refresh_soundboard_boards()
         self.refresh_soundboard(select_id=pad.id)
         if self.model is None:
             self.soundboard_status_label.setText(
@@ -1204,6 +1319,432 @@ class LiveVoicePage:
             return
         self.soundboard_status_label.setText("Pad saved. Building its local cache…")
         self._queue_soundboard_pad(pad, force_generate=True)
+
+    def add_soundboard_audio_pad(self):
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Add soundboard audio clip",
+            self.script_dir,
+            "Audio files (*.wav *.flac *.ogg *.mp3 *.aiff *.aif);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            AudioFileSpeechSession(path)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Soundboard audio",
+                f"This audio file could not be opened by the installed audio decoder:\n\n{exc}",
+            )
+            return
+        default = os.path.splitext(os.path.basename(path))[0] or "Audio clip"
+        label, accepted = QInputDialog.getText(
+            self, "Add soundboard audio clip", "Pad label:", text=default
+        )
+        if not accepted or not label.strip():
+            return
+        try:
+            pad = self.soundboard_store.import_audio_pad(path, label.strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "Soundboard audio", f"Could not import the clip:\n\n{exc}")
+            return
+        self.refresh_soundboard_boards()
+        self.refresh_soundboard(select_id=pad.id)
+        self.refresh_live_global_hotkeys()
+        self.soundboard_status_label.setText(
+            f"Imported {pad.label}. The soundboard now owns a local copy."
+        )
+
+    def clear_soundboard_cache(self):
+        answer = QMessageBox.question(
+            self,
+            "Clear soundboard cache",
+            "Delete all cached soundboard TTS audio? Boards, pads, imported audio clips, "
+            "favorites, tags and hotkeys will remain.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.soundboard_store.clear_cache()
+        self.refresh_soundboard()
+        self.soundboard_status_label.setText(
+            f"Cleared {removed} cached TTS audio file(s)."
+        )
+
+    def refresh_soundboard_boards(self, select_id=None):
+        if not hasattr(self, "soundboard_board_combo"):
+            return
+        selected = select_id or self.soundboard_store.active_board_id
+        self.soundboard_board_combo.blockSignals(True)
+        self.soundboard_board_combo.clear()
+        for board in self.soundboard_store.boards:
+            self.soundboard_board_combo.addItem(
+                f"{board.name} ({len(board.pads)})", board.id
+            )
+        index = self.soundboard_board_combo.findData(selected)
+        self.soundboard_board_combo.setCurrentIndex(max(0, index))
+        self.soundboard_board_combo.blockSignals(False)
+
+    def refresh_soundboard_board_defaults(self):
+        if not hasattr(self, "soundboard_defaults_label"):
+            return
+        board = self.soundboard_store.active_board()
+        if board is None:
+            self.soundboard_defaults_label.setText("Voice: none · Route: none")
+            return
+
+        voice_name = "none"
+        if board.default_voice_id:
+            voice = self.voice_library.get(board.default_voice_id)
+            if voice is not None:
+                voice_name = voice.name
+            else:
+                board.default_voice_id = ""
+                self.soundboard_store.save()
+                voice_name = "missing voice cleared"
+
+        route_name = "none"
+        if board.route_profile:
+            profile = self.live_route_store.get(board.route_profile)
+            if profile is not None:
+                route_name = profile.name
+            else:
+                board.route_profile = ""
+                self.soundboard_store.save()
+                route_name = "missing route cleared"
+
+        self.soundboard_defaults_label.setText(
+            f"Voice: {voice_name} · Route: {route_name}"
+        )
+        if hasattr(self, "soundboard_board_policy_combo"):
+            self.soundboard_board_policy_combo.blockSignals(True)
+            index = self.soundboard_board_policy_combo.findData(
+                board.default_interrupt_policy or "queue"
+            )
+            self.soundboard_board_policy_combo.setCurrentIndex(max(0, index))
+            self.soundboard_board_policy_combo.blockSignals(False)
+
+    def on_soundboard_board_policy_changed(self, _index):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        policy = str(self.soundboard_board_policy_combo.currentData() or "queue")
+        board.default_interrupt_policy = policy
+        self.soundboard_store.save()
+        self.soundboard_status_label.setText(
+            f"{board.name} default trigger behavior: {self.soundboard_board_policy_combo.currentText()}"
+        )
+
+    def set_soundboard_default_voice(self):
+        board = self.soundboard_store.active_board()
+        voice = self.voice_library.get(self.active_voice_id) if self.active_voice_id else None
+        if board is None:
+            return
+        if voice is None:
+            QMessageBox.information(
+                self,
+                "Board default voice",
+                "Pick one of your saved voices first. Built-in transient selections are not stored as board defaults.",
+            )
+            return
+        board.default_voice_id = voice.id
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+        self.soundboard_status_label.setText(
+            f"{board.name} will prefer {voice.name} when the board is selected."
+        )
+
+    def clear_soundboard_default_voice(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        board.default_voice_id = ""
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+
+    def set_soundboard_default_route(self):
+        board = self.soundboard_store.active_board()
+        profile = self.active_live_route_profile()
+        if board is None or profile is None:
+            return
+        board.route_profile = profile.id
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+        self.soundboard_status_label.setText(
+            f"{board.name} will prefer the {profile.name} route. External routes still require arming."
+        )
+
+    def clear_soundboard_default_route(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        board.route_profile = ""
+        self.soundboard_store.save()
+        self.refresh_soundboard_board_defaults()
+
+    def soundboard_defaults_can_apply(self):
+        return not (
+            self.live_voice_busy
+            or self.live_voice_queue
+            or self.live_audio_output.is_playing()
+            or self.live_monitor_output.is_playing()
+            or getattr(self, "model_is_loading", False)
+            or self.is_generating
+            or self.api_busy
+        )
+
+    def apply_soundboard_board_defaults(self, board):
+        if board is None:
+            return
+        if not self.soundboard_defaults_can_apply():
+            self.soundboard_status_label.setText(
+                f"{board.name} selected. Its defaults were not applied while Live Voice was busy."
+            )
+            return
+
+        if board.route_profile:
+            index = self.live_route_profile_combo.findData(board.route_profile)
+            if index >= 0:
+                self.live_external_armed = False
+                if self.live_route_profile_combo.currentIndex() != index:
+                    self.live_route_profile_combo.setCurrentIndex(index)
+                else:
+                    self.live_route_store.select(board.route_profile)
+                    self.refresh_live_audio_devices()
+                    self.update_live_route_state()
+
+        if board.default_voice_id:
+            voice = self.voice_library.get(board.default_voice_id)
+            if voice is None:
+                board.default_voice_id = ""
+                self.soundboard_store.save()
+            elif self.active_voice_id != voice.id:
+                self.use_voice(voice)
+
+        self.refresh_soundboard_board_defaults()
+
+    def on_soundboard_board_changed(self, _index):
+        board_id = self.soundboard_board_combo.currentData()
+        if not board_id:
+            return
+        board = self.soundboard_store.select_board(str(board_id))
+        if board is None:
+            return
+        self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
+        can_apply = self.soundboard_defaults_can_apply()
+        self.apply_soundboard_board_defaults(board)
+        self.live_board_defaults_applied = can_apply
+        if can_apply:
+            self.soundboard_status_label.setText(
+                f"{board.name}: {len(board.pads)} pad(s)"
+            )
+
+    def create_soundboard_board(self):
+        name, accepted = QInputDialog.getText(
+            self, "New soundboard", "Board name:", text="New board"
+        )
+        if not accepted or not name.strip():
+            return
+        board = self.soundboard_store.create_board(name.strip())
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
+        self.refresh_soundboard_board_defaults()
+        self.soundboard_status_label.setText(f"Created {board.name}")
+
+    def rename_soundboard_board(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        name, accepted = QInputDialog.getText(
+            self, "Rename soundboard", "Board name:", text=board.name
+        )
+        if not accepted or not name.strip():
+            return
+        board = self.soundboard_store.rename_board(board.id, name.strip())
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.refresh_soundboard_board_defaults()
+        self.soundboard_status_label.setText(f"Renamed board to {board.name}")
+
+    def delete_soundboard_board(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        if len(self.soundboard_store.boards) <= 1:
+            QMessageBox.information(
+                self, "Delete soundboard", "The last soundboard cannot be deleted."
+            )
+            return
+        if self.live_voice_busy or self.live_voice_queue or self.live_audio_output.is_playing() \
+                or self.live_monitor_output.is_playing():
+            QMessageBox.information(
+                self,
+                "Delete soundboard",
+                "Stop Live Voice and clear the queue before deleting a board.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete soundboard",
+            f"Delete “{board.name}” and its {len(board.pads)} pad(s)?\n\n"
+            "Owned audio clips and unreferenced cached TTS files will also be deleted.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.soundboard_store.remove_board(board.id)
+        self.refresh_soundboard_boards()
+        self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
+        self.refresh_soundboard_board_defaults()
+        if removed is not None:
+            self.soundboard_status_label.setText(f"Deleted board {removed.name}")
+
+    def select_soundboard_board_index(self, index):
+        if not (0 <= index < len(self.soundboard_store.boards)):
+            return
+        board = self.soundboard_store.select_board(self.soundboard_store.boards[index].id)
+        if board is None:
+            return
+        self.refresh_soundboard_boards()
+        self.refresh_soundboard()
+        self.refresh_soundboard_board_defaults()
+        self.apply_soundboard_board_defaults(board)
+        self.refresh_live_global_hotkeys()
+        self.soundboard_status_label.setText(f"Board: {board.name}")
+
+    def trigger_soundboard_pad_index(self, index):
+        board = self.soundboard_store.active_board()
+        if board is None or not (0 <= index < len(board.pads)):
+            return
+        self._queue_soundboard_pad(board.pads[index])
+
+    def move_selected_soundboard_pad(self, direction):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        if self.soundboard_store.move_pad(pad.id, direction):
+            self.refresh_soundboard(select_id=pad.id)
+            self.refresh_live_global_hotkeys()
+            self.soundboard_status_label.setText(f"Moved {pad.label}.")
+
+    def toggle_selected_soundboard_favorite(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        pad.favorite = not bool(pad.favorite)
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+        self.soundboard_status_label.setText(
+            f"{'Favorited' if pad.favorite else 'Unfavorited'} {pad.label}"
+        )
+
+    def edit_selected_soundboard_tags(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        current = ", ".join(pad.tags or [])
+        value, accepted = QInputDialog.getText(
+            self,
+            "Soundboard tags",
+            "Comma-separated tags:",
+            text=current,
+        )
+        if not accepted:
+            return
+        seen = set()
+        tags = []
+        for item in value.split(","):
+            tag = item.strip()
+            key = tag.casefold()
+            if tag and key not in seen:
+                seen.add(key)
+                tags.append(tag)
+        pad.tags = tags
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+
+    def set_selected_soundboard_behavior(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        options = [
+            ("Use board default", ""),
+            ("Queue", "queue"),
+            ("Interrupt current", "interrupt"),
+            ("Ignore if busy", "ignore"),
+        ]
+        current_value = pad.interrupt_policy or ""
+        current_index = next(
+            (
+                index
+                for index, (_label, value) in enumerate(options)
+                if value == current_value
+            ),
+            0,
+        )
+        label, accepted = QInputDialog.getItem(
+            self,
+            "Pad trigger behavior",
+            "When this pad is triggered:",
+            [item[0] for item in options],
+            current_index,
+            False,
+        )
+        if not accepted:
+            return
+        pad.interrupt_policy = next(
+            value for option_label, value in options if option_label == label
+        )
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+
+    def _soundboard_trigger_policy(self, pad):
+        if pad.interrupt_policy in ("queue", "interrupt", "ignore"):
+            return pad.interrupt_policy
+        board = self.soundboard_store.active_board()
+        if board is not None and board.default_interrupt_policy in (
+            "queue",
+            "interrupt",
+            "ignore",
+        ):
+            return board.default_interrupt_policy
+        return "queue"
+
+    def _soundboard_is_busy(self):
+        return bool(
+            self.live_speech_thread is not None
+            or self.live_voice_queue
+            or self.live_audio_output.is_playing()
+            or self.live_monitor_output.is_playing()
+        )
+
+    def _enqueue_soundboard_item(self, item, pad, interactive=True):
+        policy = self._soundboard_trigger_policy(pad)
+        busy = self._soundboard_is_busy()
+        if policy == "ignore" and busy:
+            self.soundboard_status_label.setText(
+                f"{pad.label}: ignored because Live Voice is busy."
+            )
+            return False
+
+        if not self._enqueue_live_item(item):
+            self.soundboard_status_label.setText(
+                f"{pad.label}: queue limit reached."
+            )
+            return False
+
+        if policy == "interrupt" and busy:
+            # _enqueue_live_item appended the new request. Move it to the front so it
+            # becomes the next utterance after the current output is cancelled.
+            queued = self.live_voice_queue.pop()
+            self.live_voice_queue.insert(0, queued)
+            self._refresh_live_queue()
+            self.live_stop_current()
+
+        if self.live_speech_thread is None:
+            self._live_start_next()
+        return True
 
     def selected_soundboard_pad(self):
         item = self.soundboard_list.currentItem()
@@ -1237,11 +1778,48 @@ class LiveVoicePage:
             and abs(float(self.top_p) - pad.top_p) < 1e-9
         )
 
-    def _queue_soundboard_pad(self, pad, force_generate=False):
+    def _soundboard_problem(self, title, message, interactive=True):
+        if interactive:
+            QMessageBox.information(self, title, message)
+        else:
+            QApplication.beep()
+            self.set_status_message(f"Status: {title}: {message}")
+
+    def _queue_soundboard_pad(self, pad, force_generate=False, interactive=True):
         route_problem = self.live_route_problem()
         if route_problem:
-            QMessageBox.information(self, "Soundboard route", route_problem)
+            self._soundboard_problem("Soundboard route", route_problem, interactive)
             return
+
+        if pad.kind == "audio":
+            path = self.soundboard_store.audio_path(pad)
+            if not path or not os.path.isfile(path):
+                self._soundboard_problem(
+                    "Soundboard audio",
+                    f"{pad.label}'s local audio file is missing. Delete and re-import the pad.",
+                    interactive,
+                )
+                return
+            try:
+                info = sf.info(path)
+                clip_seconds = (
+                    float(info.frames) / float(info.samplerate)
+                    if info.samplerate
+                    else self._estimate_live_item_seconds(pad.label)
+                )
+            except Exception:
+                clip_seconds = self._estimate_live_item_seconds(pad.label)
+            item = {
+                "text": pad.label,
+                "label": pad.label,
+                "audio_path": path,
+                "estimated_seconds": clip_seconds,
+                "soundboard_pad_id": pad.id,
+            }
+            if self._enqueue_soundboard_item(item, pad, interactive):
+                self.soundboard_status_label.setText(f"{pad.label}: audio clip")
+            return
+
         expected = self._soundboard_cache_key(pad)
         cached = (
             not force_generate
@@ -1256,47 +1834,46 @@ class LiveVoicePage:
                 "cache_provenance": pad.cache_provenance,
                 "soundboard_pad_id": pad.id,
             }
-            if not self._enqueue_live_item(item):
-                self.soundboard_status_label.setText("Soundboard queue limit reached.")
-                return
-            self.soundboard_status_label.setText(f"{pad.label}: cached")
-        else:
-            if self.live_speech_thread is None and (
-                getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy
-            ):
-                QMessageBox.information(
-                    self,
-                    "Soundboard",
-                    "This pad needs to be regenerated, but the model is busy with another task.",
-                )
-                return
-            if not self._current_context_matches_pad(pad):
-                QMessageBox.information(
-                    self,
-                    "Soundboard cache needs rebuilding",
-                    f"{pad.label} no longer has a valid cache and its saved voice/model is not active. "
-                    "Select that voice/model again, then trigger the pad to rebuild it.",
-                )
-                return
-            item = {
-                "text": pad.text,
-                "label": pad.label,
-                "soundboard_pad_id": pad.id,
-                "cache_key": expected,
-            }
-            if not self._enqueue_live_item(item):
-                self.soundboard_status_label.setText("Soundboard queue limit reached.")
-                return
-            self.soundboard_status_label.setText(f"{pad.label}: generating and caching…")
-        if self.live_speech_thread is None:
-            self._live_start_next()
+            if self._enqueue_soundboard_item(item, pad, interactive):
+                self.soundboard_status_label.setText(f"{pad.label}: cached")
+            return
+
+        if self.live_speech_thread is None and (
+            getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy
+        ):
+            self._soundboard_problem(
+                "Soundboard",
+                "This pad needs to be regenerated, but the model is busy with another task.",
+                interactive,
+            )
+            return
+        if not self._current_context_matches_pad(pad):
+            self._soundboard_problem(
+                "Soundboard cache needs rebuilding",
+                f"{pad.label} no longer has a valid cache and its saved voice/model is not active. "
+                "Select that voice/model again, then trigger the pad to rebuild it.",
+                interactive,
+            )
+            return
+        item = {
+            "text": pad.text,
+            "label": pad.label,
+            "soundboard_pad_id": pad.id,
+            "cache_key": expected,
+        }
+        if self._enqueue_soundboard_item(item, pad, interactive):
+            self.soundboard_status_label.setText(
+                f"{pad.label}: generating and caching…"
+            )
 
     def delete_selected_soundboard_pad(self):
         pad = self.selected_soundboard_pad()
         if pad is None:
             return
         self.soundboard_store.remove_pad(pad.id)
+        self.refresh_soundboard_boards()
         self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
         self.soundboard_status_label.setText(f"Deleted {pad.label}")
 
     def refresh_soundboard(self, select_id=None):
@@ -1306,28 +1883,216 @@ class LiveVoicePage:
         board = self.soundboard_store.active_board()
         if board is None:
             return
+
+        query = (
+            self.soundboard_search_input.text().strip().casefold()
+            if hasattr(self, "soundboard_search_input")
+            else ""
+        )
+        favorites_only = (
+            self.soundboard_favorites_only.isChecked()
+            if hasattr(self, "soundboard_favorites_only")
+            else False
+        )
+
         for index, pad in enumerate(board.pads, 1):
-            expected = self._soundboard_cache_key(pad)
-            cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
-            suffix = " · cached" if cached else " · rebuild needed"
-            shortcut = f"Alt+{index}" if index <= 9 else ""
-            shortcut_suffix = f"  [{shortcut}]" if shortcut else ""
-            self.soundboard_list.addItem(f"{pad.label}{suffix}{shortcut_suffix}")
+            searchable = " ".join(
+                [pad.label, pad.text or "", " ".join(pad.tags or [])]
+            ).casefold()
+            if query and query not in searchable:
+                continue
+            if favorites_only and not pad.favorite:
+                continue
+
+            if pad.kind == "audio":
+                audio_path = self.soundboard_store.audio_path(pad)
+                suffix = (
+                    " · audio clip"
+                    if audio_path and os.path.isfile(audio_path)
+                    else " · audio missing"
+                )
+                tooltip = audio_path or "Audio file missing"
+            else:
+                expected = self._soundboard_cache_key(pad)
+                cached = (
+                    pad.cache_key == expected
+                    and self.soundboard_store.has_cache(expected)
+                )
+                suffix = " · cached" if cached else " · rebuild needed"
+                tooltip = pad.text
+
+            if pad.favorite:
+                suffix = " ★" + suffix
+            if pad.hotkey:
+                suffix += f" · {pad.hotkey}"
+            if pad.interrupt_policy:
+                suffix += f" · {pad.interrupt_policy}"
+            if index <= 9:
+                suffix += f"  [Alt+{index}]"
+
+            if pad.tags:
+                tooltip = (tooltip + "\n" if tooltip else "") + "Tags: " + ", ".join(pad.tags)
+            tooltip = (
+                (tooltip + "\n" if tooltip else "")
+                + f"Trigger behavior: {pad.interrupt_policy or 'board default'}"
+            )
+
+            self.soundboard_list.addItem(f"{pad.label}{suffix}")
             item = self.soundboard_list.item(self.soundboard_list.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, pad.id)
-            tooltip = pad.text
-            if shortcut:
-                tooltip += f"\nShortcut: {shortcut}"
             item.setToolTip(tooltip)
             if select_id == pad.id:
                 self.soundboard_list.setCurrentItem(item)
+
+    def _assigned_live_hotkeys(self, exclude_pad_id=None, include_stop=True):
+        assigned = {}
+        if include_stop:
+            stop = str(self.app_settings.get("live_voice", {}).get("stop_hotkey", "") or "").strip()
+            if stop:
+                assigned[stop] = "Global Stop All"
+        board = self.soundboard_store.active_board()
+        for pad in (board.pads if board is not None else []):
+            if pad.id == exclude_pad_id or not pad.hotkey:
+                continue
+            assigned[pad.hotkey] = f"Soundboard: {pad.label}"
+        return assigned
+
+    def _prompt_live_hotkey(self, title, current=""):
+        value, accepted = QInputDialog.getText(
+            self,
+            title,
+            "Shortcut (requires Ctrl, Alt or Shift):",
+            text=current or "Ctrl+Alt+1",
+        )
+        if not accepted:
+            return ""
+        try:
+            return normalize_hotkey(value)
+        except HotkeyError as exc:
+            QMessageBox.warning(self, title, str(exc))
+            return ""
+
+    def set_selected_soundboard_hotkey(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            QMessageBox.information(self, "Soundboard hotkey", "Select a soundboard pad first.")
+            return
+        hotkey = self._prompt_live_hotkey("Set soundboard hotkey", pad.hotkey)
+        if not hotkey:
+            return
+        owner = self._assigned_live_hotkeys(exclude_pad_id=pad.id).get(hotkey)
+        if owner:
+            QMessageBox.warning(self, "Soundboard hotkey", f"{hotkey} is already assigned to {owner}.")
+            return
+        pad.hotkey = hotkey
+        self.soundboard_store.save()
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["global_hotkeys_enabled"] = True
+        self.save_app_settings()
+        self.live_hotkeys_enabled_checkbox.setChecked(True)
+        self.refresh_soundboard(select_id=pad.id)
+        self.refresh_live_global_hotkeys()
+
+    def clear_selected_soundboard_hotkey(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None or not pad.hotkey:
+            return
+        pad.hotkey = ""
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+        self.refresh_live_global_hotkeys()
+
+    def set_live_stop_hotkey(self):
+        settings = self.app_settings.setdefault("live_voice", {})
+        hotkey = self._prompt_live_hotkey("Set Global Stop All hotkey", settings.get("stop_hotkey", ""))
+        if not hotkey:
+            return
+        owner = self._assigned_live_hotkeys(include_stop=False).get(hotkey)
+        if owner:
+            QMessageBox.warning(self, "Global Stop All hotkey", f"{hotkey} is already assigned to {owner}.")
+            return
+        settings["stop_hotkey"] = hotkey
+        self.live_stop_hotkey_label.setText(hotkey)
+        self.save_app_settings()
+        self.refresh_live_global_hotkeys()
+
+    def clear_live_stop_hotkey(self):
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["stop_hotkey"] = ""
+        self.live_stop_hotkey_label.setText("Not set")
+        self.save_app_settings()
+        self.refresh_live_global_hotkeys()
+
+    def on_live_global_hotkeys_toggled(self, enabled):
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["global_hotkeys_enabled"] = bool(enabled)
+        self.save_app_settings()
+        self.refresh_live_global_hotkeys()
+
+    def refresh_live_global_hotkeys(self):
+        if not hasattr(self, "live_hotkeys"):
+            return
+        self.live_hotkeys.clear()
+        errors = []
+        settings = self.app_settings.setdefault("live_voice", {})
+        pad_hotkeys_enabled = bool(settings.get("global_hotkeys_enabled", False))
+        stop = str(settings.get("stop_hotkey", "") or "").strip()
+        if stop:
+            error = self.live_hotkeys.register("stop_all", stop)
+            if error:
+                errors.append(f"{stop}: {error}")
+        if pad_hotkeys_enabled:
+            board = self.soundboard_store.active_board()
+            for pad in (board.pads if board is not None else []):
+                if not pad.hotkey:
+                    continue
+                error = self.live_hotkeys.register(f"pad:{pad.id}", pad.hotkey)
+                if error:
+                    errors.append(f"{pad.label} ({pad.hotkey}): {error}")
+
+        if not self.live_hotkeys.supported:
+            self.live_hotkey_status_label.setText("Global hotkeys: Windows only")
+            self.live_hotkey_status_label.setToolTip("This first implementation uses the Windows RegisterHotKey API.")
+        elif errors:
+            self.live_hotkey_status_label.setText(
+                f"Global hotkeys: {self.live_hotkeys.registered_count()} active · {len(errors)} conflict(s)"
+            )
+            self.live_hotkey_status_label.setToolTip("\n".join(errors))
+        else:
+            count = self.live_hotkeys.registered_count()
+            if not pad_hotkeys_enabled:
+                self.live_hotkey_status_label.setText(
+                    "Global pad hotkeys: disabled"
+                    + (" · Stop All active" if stop and count else "")
+                )
+                self.live_hotkey_status_label.setToolTip(
+                    "Pad assignments are preserved but not registered. "
+                    "A configured emergency Stop All remains available."
+                )
+            else:
+                self.live_hotkey_status_label.setText(
+                    f"Global hotkeys: {count} active" if count else "Global hotkeys: none"
+                )
+                self.live_hotkey_status_label.setToolTip("")
+
+    def handle_live_global_hotkey(self, action_id):
+        if action_id == "stop_all":
+            self.live_stop_all()
+            return
+        if str(action_id).startswith("pad:"):
+            pad = self.soundboard_store.get_pad(str(action_id).split(":", 1)[1])
+            if pad is not None:
+                self._queue_soundboard_pad(pad, interactive=False)
 
     def _refresh_live_queue(self):
         self.live_queue_list.clear()
         queued_seconds = 0.0
         for index, item in enumerate(self.live_voice_queue, 1):
-            text = item["text"].replace("\n", " ")
-            queued_seconds += self._estimate_live_item_seconds(text)
+            text = str(item.get("text") or "").replace("\n", " ")
+            queued_seconds += float(
+                item.get("estimated_seconds")
+                or self._estimate_live_item_seconds(text)
+            )
             self.live_queue_list.addItem(f"{index}. {text[:120]}")
         if hasattr(self, "live_queue_pressure_label"):
             self.live_queue_pressure_label.setText(

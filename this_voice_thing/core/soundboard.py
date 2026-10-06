@@ -5,6 +5,7 @@ import datetime
 import hashlib
 import json
 import os
+import shutil
 import uuid
 import wave
 
@@ -32,10 +33,13 @@ class Pad:
     repetition_penalty: float = 1.2
     min_p: float = 0.05
     top_p: float = 1.0
-    interrupt_policy: str = "queue"
+    interrupt_policy: str = ""
     cache_policy: str = "auto"
     cache_key: str = ""
     cache_provenance: str = ""
+    audio_file: str = ""
+    hotkey: str = ""
+    favorite: bool = False
     tags: list = field(default_factory=list)
     created: str = field(default_factory=lambda: datetime.datetime.now().isoformat(timespec="seconds"))
 
@@ -47,6 +51,7 @@ class Board:
     pads: list = field(default_factory=list)
     default_voice_id: str = ""
     route_profile: str = ""
+    default_interrupt_policy: str = "queue"
 
 
 def voice_fingerprint(voice, clip_path="", transcript=""):
@@ -75,6 +80,7 @@ class SoundboardStore:
         self.app_dir = app_dir
         self.dir = os.path.join(app_dir, SOUNDBOARD_DIRNAME)
         self.cache_dir = os.path.join(self.dir, "cache")
+        self.audio_dir = os.path.join(self.dir, "audio")
         self.index_path = os.path.join(self.dir, INDEX_FILENAME)
         self.boards = []
         self.active_board_id = ""
@@ -102,7 +108,7 @@ class SoundboardStore:
                 if not isinstance(item, dict) or not str(item.get("label", "")).strip():
                     continue
                 filtered = {key: value for key, value in item.items() if key in pad_fields}
-                if filtered.get("kind", "tts") != "tts":
+                if filtered.get("kind", "tts") not in ("tts", "audio"):
                     continue
                 pads.append(Pad(**filtered))
             values = {key: value for key, value in raw.items() if key in board_fields and key != "pads"}
@@ -136,59 +142,71 @@ class SoundboardStore:
             self.active_board_id = board.id
         return board
 
-    def select_board(self, board_id):
-        if any(board.id == board_id for board in self.boards):
-            self.active_board_id = board_id
-            self.save()
-        return self.active_board()
+    def get_board(self, board_id):
+        return next((board for board in self.boards if board.id == board_id), None)
 
-    def add_board(self, name):
+    def _unique_board_name(self, name, exclude_id=None):
         base = str(name or "").strip() or "Board"
-        existing = {board.name.lower() for board in self.boards}
-        candidate = base
-        number = 2
-        while candidate.lower() in existing:
-            candidate = f"{base} {number}"
-            number += 1
-        board = Board(name=candidate)
-        self.boards.append(board)
-        self.active_board_id = board.id
-        self.save()
-        return board
-
-    def rename_board(self, board_id, name):
-        board = next((board for board in self.boards if board.id == board_id), None)
-        if board is None:
-            return None
-        base = str(name or "").strip()
-        if not base:
-            return board
         existing = {
-            other.name.lower()
-            for other in self.boards
-            if other.id != board.id
+            board.name.lower()
+            for board in self.boards
+            if board.id != exclude_id
         }
         candidate = base
         number = 2
         while candidate.lower() in existing:
             candidate = f"{base} {number}"
             number += 1
-        board.name = candidate
+        return candidate
+
+    def create_board(self, name):
+        board = Board(name=self._unique_board_name(name))
+        self.boards.append(board)
+        self.active_board_id = board.id
         self.save()
         return board
 
+    def select_board(self, board_id):
+        board = self.get_board(board_id)
+        if board is None:
+            return None
+        self.active_board_id = board.id
+        self.save()
+        return board
+
+    def rename_board(self, board_id, name):
+        board = self.get_board(board_id)
+        if board is None:
+            return None
+        board.name = self._unique_board_name(name, exclude_id=board.id)
+        self.save()
+        return board
+
+    def _delete_owned_audio(self, pad):
+        if pad is None or pad.kind != "audio":
+            return
+        audio_path = self.audio_path(pad)
+        if not audio_path:
+            return
+        try:
+            os.remove(audio_path)
+        except OSError:
+            pass
+
     def remove_board(self, board_id):
         if len(self.boards) <= 1:
+            raise ValueError("The last soundboard cannot be deleted.")
+        board = self.get_board(board_id)
+        if board is None:
             return None
-        removed = next((board for board in self.boards if board.id == board_id), None)
-        if removed is None:
-            return None
-        self.boards = [board for board in self.boards if board.id != board_id]
-        if self.active_board_id == board_id:
+        for pad in board.pads:
+            self._delete_owned_audio(pad)
+        self.boards = [item for item in self.boards if item.id != board.id]
+        if self.active_board_id == board.id:
             self.active_board_id = self.boards[0].id
         self.save()
         self.garbage_collect_cache()
-        return removed
+        return board
 
     def get_pad(self, pad_id):
         for board in self.boards:
@@ -215,6 +233,47 @@ class SoundboardStore:
         self.save()
         return pad
 
+    def move_pad(self, pad_id, direction):
+        for board in self.boards:
+            for index, pad in enumerate(board.pads):
+                if pad.id != pad_id:
+                    continue
+                target = index + int(direction)
+                if not (0 <= target < len(board.pads)):
+                    return False
+                board.pads[index], board.pads[target] = board.pads[target], board.pads[index]
+                self.save()
+                return True
+        return False
+
+    def audio_path(self, pad):
+        if pad is None or pad.kind != "audio" or not pad.audio_file:
+            return ""
+        filename = os.path.basename(pad.audio_file)
+        if filename != pad.audio_file:
+            return ""
+        return os.path.join(self.audio_dir, filename)
+
+    def import_audio_pad(self, path, label, board=None):
+        source = os.path.abspath(str(path or ""))
+        if not os.path.isfile(source):
+            raise FileNotFoundError(source)
+        pad = Pad(label=str(label or "").strip() or os.path.basename(source), text="", kind="audio", interrupt_policy="")
+        extension = os.path.splitext(source)[1].lower()
+        filename = f"{pad.id}{extension or '.audio'}"
+        os.makedirs(self.audio_dir, exist_ok=True)
+        destination = os.path.join(self.audio_dir, filename)
+        shutil.copy2(source, destination)
+        pad.audio_file = filename
+        try:
+            return self.add_pad(pad, board)
+        except Exception:
+            try:
+                os.remove(destination)
+            except OSError:
+                pass
+            raise
+
     def remove_pad(self, pad_id):
         removed = None
         for board in self.boards:
@@ -227,6 +286,7 @@ class SoundboardStore:
             board.pads = kept
         self.save()
         if removed is not None:
+            self._delete_owned_audio(removed)
             self.garbage_collect_cache()
         return removed
 
@@ -276,7 +336,7 @@ class SoundboardStore:
         return path
 
     def clear_cache(self):
-        """Delete all cached audio while preserving boards and pads."""
+        """Delete all cached TTS audio while preserving boards, pads, and imported clips."""
         removed = 0
         if os.path.isdir(self.cache_dir):
             for name in os.listdir(self.cache_dir):

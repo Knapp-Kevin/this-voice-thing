@@ -11,6 +11,7 @@ import time
 import wave
 
 import numpy as np
+import soundfile as sf
 
 
 @dataclass(frozen=True)
@@ -195,6 +196,85 @@ class CachedSpeechSession:
                     pcm = handle.readframes(4096)
                     if not pcm:
                         break
+                    if self._first_audio_at is None:
+                        self._first_audio_at = time.monotonic()
+                    self._frames += 1
+                    self._audio_bytes += len(pcm)
+                    yield AudioFrame(
+                        pcm=pcm,
+                        sample_rate=self.sample_rate,
+                        provenance=self.provenance,
+                    )
+        finally:
+            self._ended_at = time.monotonic()
+
+    def metrics(self):
+        started = self._started_at
+        ended = self._ended_at or time.monotonic()
+        wall = (ended - started) if started is not None else 0.0
+        audio_seconds = self._audio_bytes / float(self.sample_rate * 2)
+        return {
+            "mode": self.delivery_mode,
+            "sample_rate": self.sample_rate,
+            "frames": self._frames,
+            "audio_seconds": round(audio_seconds, 4),
+            "generation_seconds": round(wall, 4),
+            "ttfa_seconds": (
+                round(self._first_audio_at - started, 4)
+                if started is not None and self._first_audio_at is not None
+                else None
+            ),
+            "rtf": round(wall / audio_seconds, 4) if audio_seconds else None,
+            "cancelled": bool(self.cancelled),
+            "provenance": self.provenance,
+        }
+
+
+class AudioFileSpeechSession:
+    """Stream a local audio file through the same mono s16 PCM interface as Live Voice."""
+
+    def __init__(self, path, label="Soundboard audio"):
+        self.path = path
+        self.label = label
+        info = sf.info(path)
+        self.sample_rate = int(info.samplerate or 0)
+        if self.sample_rate <= 0:
+            raise ValueError("Audio file does not expose a valid sample rate.")
+        if int(info.channels or 0) <= 0:
+            raise ValueError("Audio file does not expose a valid channel count.")
+        self.delivery_mode = "audio"
+        self.provenance = "soundboard-audio-file"
+        self._started_at = None
+        self._first_audio_at = None
+        self._ended_at = None
+        self._audio_bytes = 0
+        self._frames = 0
+        self.cancelled = False
+
+    @staticmethod
+    def _float_to_pcm(values):
+        mono = np.asarray(values, dtype=np.float32).reshape(-1)
+        if not len(mono):
+            return b""
+        return (
+            np.clip(mono, -1.0, 1.0) * 32767.0
+        ).astype("<i2", copy=False).tobytes()
+
+    def frames(self, cancelled=lambda: False):
+        self._started_at = time.monotonic()
+        try:
+            with sf.SoundFile(self.path, "r") as handle:
+                while True:
+                    if cancelled():
+                        self.cancelled = True
+                        break
+                    values = handle.read(frames=4096, dtype="float32", always_2d=True)
+                    if not len(values):
+                        break
+                    mono = values.mean(axis=1)
+                    pcm = self._float_to_pcm(mono)
+                    if not pcm:
+                        continue
                     if self._first_audio_at is None:
                         self._first_audio_at = time.monotonic()
                     self._frames += 1

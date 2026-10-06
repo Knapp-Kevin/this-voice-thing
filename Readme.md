@@ -281,7 +281,13 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Repeat last** resubmits the most recent completed line.
 - **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
 - **Multiple boards:** create, rename, switch and delete soundboard boards without mixing unrelated phrase sets together.
-- **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, and **Ctrl+Shift+Enter** repeats the last line. These are not system-wide hotkeys.
+- **Board defaults:** each board can prefer a saved voice, route, and default trigger policy. External routes remain disarmed when a board is selected, so a saved board cannot silently begin transmitting.
+- **Quick voices:** favorite saved voices for one-click switching from Live Voice without digging through the full voice library.
+- **Audio clip pads:** import local WAV/FLAC/OGG/MP3/AIFF files into the soundboard's owned `soundboard/audio/` storage. Clips use the same routing, monitoring, Stop, hotkey, and queue paths as generated speech and do not require a TTS model.
+- **Pad organization:** favorite pads, add tags, search by name/text/tag, filter to favorites, and move pads up/down without changing their saved identity.
+- **Explicit trigger behavior:** pads can inherit the board default or choose **Queue**, **Interrupt current**, or **Ignore if busy**. Every behavior still respects Live Voice's bounded queue and fail-closed route checks.
+- **Opt-in Windows global hotkeys:** assign modifier-based system-wide shortcuts to pads and Stop All. A visible switch disables all global pad triggers instantly without deleting assignments, while a configured emergency Stop All stays registered; conflicts are reported rather than silently stealing keys.
+- **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, **Ctrl+Shift+Enter** repeats the last line, and **Ctrl+Shift+Up / Ctrl+Shift+Down** reorders the selected pad. These remain available independently of optional system-wide hotkeys.
 - **Bounded queue:** Live Voice caps outstanding work at 25 items and about 10 minutes of estimated speech so repeated pad presses or automation cannot grow memory without bound.
 - **Editable queue:** select a queued line to remove it or move it up/down before playback. **Delete** removes the selected queued item and **Alt+Up / Alt+Down** reorder it while Live Voice has focus.
 - The active model label exposes a plain-language readiness tooltip: getting ready, ready, or load one to speak.

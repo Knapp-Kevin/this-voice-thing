@@ -22,7 +22,7 @@ def _parser():
     convert.add_argument("--input", required=True)
     convert.add_argument("--output", required=True)
     convert.add_argument("--index")
-    convert.add_argument("--pitch", type=float, default=0.0)
+    convert.add_argument("--pitch", type=int, default=0)
     convert.add_argument("--f0-method", choices=["rmvpe", "pm"], default="rmvpe")
     convert.add_argument("--index-rate", type=float, default=0.0)
     convert.add_argument("--speaker-id", type=int)

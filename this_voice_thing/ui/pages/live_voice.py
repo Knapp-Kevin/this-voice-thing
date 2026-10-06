@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QInputDialog,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
 )
@@ -84,6 +85,21 @@ class LiveVoicePage:
         self.live_mode_label.setObjectName("Muted")
         voice_row.addWidget(self.live_mode_label)
         route_layout.addLayout(voice_row)
+
+        favorite_voice_row = QHBoxLayout()
+        favorite_voice_row.addWidget(QLabel("Quick voices"))
+        self.live_favorite_voice_combo = QComboBox()
+        favorite_voice_row.addWidget(self.live_favorite_voice_combo, 1)
+        use_favorite_voice = QPushButton("Use")
+        use_favorite_voice.clicked.connect(self.use_selected_favorite_voice)
+        favorite_voice_row.addWidget(use_favorite_voice)
+        favorite_current_voice = self._link(QPushButton("Favorite current"))
+        favorite_current_voice.clicked.connect(self.favorite_current_live_voice)
+        favorite_voice_row.addWidget(favorite_current_voice)
+        remove_favorite_voice = self._link(QPushButton("Remove favorite"))
+        remove_favorite_voice.clicked.connect(self.remove_selected_favorite_voice)
+        favorite_voice_row.addWidget(remove_favorite_voice)
+        route_layout.addLayout(favorite_voice_row)
 
         profile_row = QHBoxLayout()
         profile_row.addWidget(QLabel("Route"))
@@ -226,6 +242,29 @@ class LiveVoicePage:
         defaults_row.addWidget(clear_route_default)
         board_layout.addLayout(defaults_row)
 
+        policy_row = QHBoxLayout()
+        policy_row.addWidget(QLabel("Default pad behavior"))
+        self.soundboard_board_policy_combo = QComboBox()
+        self.soundboard_board_policy_combo.addItem("Queue", "queue")
+        self.soundboard_board_policy_combo.addItem("Interrupt current", "interrupt")
+        self.soundboard_board_policy_combo.addItem("Ignore if busy", "ignore")
+        self.soundboard_board_policy_combo.currentIndexChanged.connect(
+            self.on_soundboard_board_policy_changed
+        )
+        policy_row.addWidget(self.soundboard_board_policy_combo)
+        policy_row.addStretch(1)
+        board_layout.addLayout(policy_row)
+
+        filter_row = QHBoxLayout()
+        self.soundboard_search_input = QLineEdit()
+        self.soundboard_search_input.setPlaceholderText("Search pads by name, phrase, or tag…")
+        self.soundboard_search_input.textChanged.connect(lambda _text: self.refresh_soundboard())
+        filter_row.addWidget(self.soundboard_search_input, 1)
+        self.soundboard_favorites_only = QCheckBox("Favorites only")
+        self.soundboard_favorites_only.toggled.connect(lambda _checked: self.refresh_soundboard())
+        filter_row.addWidget(self.soundboard_favorites_only)
+        board_layout.addLayout(filter_row)
+
         self.soundboard_list = QListWidget()
         self.soundboard_list.setMinimumHeight(130)
         self.soundboard_list.itemDoubleClicked.connect(lambda _item: self.trigger_selected_soundboard_pad())
@@ -255,6 +294,15 @@ class LiveVoicePage:
         clear_hotkey = self._link(QPushButton("Clear hotkey"))
         clear_hotkey.clicked.connect(self.clear_selected_soundboard_hotkey)
         board_actions.addWidget(clear_hotkey)
+        favorite_pad = self._link(QPushButton("Favorite"))
+        favorite_pad.clicked.connect(self.toggle_selected_soundboard_favorite)
+        board_actions.addWidget(favorite_pad)
+        tags_pad = self._link(QPushButton("Tags…"))
+        tags_pad.clicked.connect(self.edit_selected_soundboard_tags)
+        board_actions.addWidget(tags_pad)
+        behavior_pad = self._link(QPushButton("Behavior…"))
+        behavior_pad.clicked.connect(self.set_selected_soundboard_behavior)
+        board_actions.addWidget(behavior_pad)
         board_actions.addStretch(1)
         self.soundboard_status_label = QLabel("Static TTS pads cache locally after their first successful generation.")
         self.soundboard_status_label.setObjectName("Muted")
@@ -315,6 +363,7 @@ class LiveVoicePage:
             pass
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
+        self.refresh_live_voice_favorites()
         self.refresh_soundboard_boards()
         self.refresh_soundboard()
         self.refresh_soundboard_board_defaults()
@@ -957,6 +1006,7 @@ class LiveVoicePage:
             repetition_penalty=float(self.repetition_penalty),
             min_p=float(self.min_p),
             top_p=float(self.top_p),
+            interrupt_policy="",
         )
 
     def save_soundboard_pad(self):

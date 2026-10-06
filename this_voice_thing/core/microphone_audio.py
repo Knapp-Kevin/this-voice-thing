@@ -222,6 +222,7 @@ class MicrophoneBlockProcessor:
         self.blocks = 0
         self.input_bytes = 0
         self.output_bytes = 0
+        self._remainder = b""
 
     @property
     def provenance(self):
@@ -234,7 +235,13 @@ class MicrophoneBlockProcessor:
     def process(self, pcm, *, sample_rate, channels):
         raw = bytes(pcm or b"")
         self.input_bytes += len(raw)
-        mono = downmix_s16le(raw, channels)
+        frame_bytes = max(2, int(channels) * 2)
+        combined = self._remainder + raw
+        usable = (len(combined) // frame_bytes) * frame_bytes
+        self._remainder = combined[usable:]
+        if usable <= 0:
+            return None
+        mono = downmix_s16le(combined[:usable], channels)
         processed = self.effects.process(mono, sample_rate)
         if not processed:
             return None
@@ -254,6 +261,7 @@ class MicrophoneBlockProcessor:
             "blocks": int(self.blocks),
             "input_bytes": int(self.input_bytes),
             "output_bytes": int(self.output_bytes),
+            "partial_frame_bytes": len(self._remainder),
             "active_seconds": round(time.monotonic() - self.started_at, 4),
             "effects": self.effects.config.as_dict(),
         }

@@ -7,6 +7,7 @@ produce reproducible evidence before product integration is considered.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,11 @@ TORCHAUDIO_VERSION = "2.7.1+cu128"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 PYPI_INDEX = "https://pypi.org/simple"
 UPSTREAM_REQUIREMENTS = "requirments_cu128_py312.txt"
+
+ASSET_REPOSITORY = "lj1995/VoiceConversionWebUI"
+ASSET_REVISION = "1be9d36ece685661920e1a7cb36eb0437c1e5581"
+HUBERT_MODEL_SHA256 = "cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5"
+RMVPE_SHA256 = "6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193"
 
 ENGINE_DIR = Path(paths.ENGINES_DIR) / NAME
 SOURCE_DIR = ENGINE_DIR / "upstream"
@@ -274,6 +280,18 @@ def install(*, reset: bool = False, log=print) -> dict:
     return result
 
 
+def _verify_sha256(path: Path, expected: str) -> None:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual.lower() != str(expected).lower():
+        raise RuntimeError(
+            f"Asset checksum mismatch for {path}: expected {expected}, got {actual}"
+        )
+
+
 def download_shared_assets(log=print) -> dict:
     if not status()["installed"]:
         raise RuntimeError("Install the pinned RVC feasibility environment first.")
@@ -281,22 +299,32 @@ def download_shared_assets(log=print) -> dict:
 from huggingface_hub import hf_hub_download, snapshot_download
 root = r""" + json.dumps(str(SOURCE_DIR)) + r"""
 snapshot_download(
-    repo_id="lj1995/VoiceConversionWebUI",
-    revision="main",
+    repo_id=""" + json.dumps(ASSET_REPOSITORY) + r""",
+    revision=""" + json.dumps(ASSET_REVISION) + r""",
     allow_patterns=["hubert_base/*"],
     local_dir=root + "/assets",
 )
 hf_hub_download(
-    repo_id="lj1995/VoiceConversionWebUI",
+    repo_id=""" + json.dumps(ASSET_REPOSITORY) + r""",
     filename="rmvpe.pt",
-    revision="main",
+    revision=""" + json.dumps(ASSET_REVISION) + r""",
     local_dir=root + "/assets/rmvpe",
 )
 """
     _run([str(venv_python()), "-c", script], cwd=SOURCE_DIR, log=log)
+    hubert = SOURCE_DIR / "assets" / "hubert_base" / "pytorch_model.bin"
+    rmvpe = SOURCE_DIR / "assets" / "rmvpe" / "rmvpe.pt"
+    if not hubert.is_file() or not rmvpe.is_file():
+        raise RuntimeError("Pinned RVC shared assets were not downloaded completely.")
+    _verify_sha256(hubert, HUBERT_MODEL_SHA256)
+    _verify_sha256(rmvpe, RMVPE_SHA256)
     return {
-        "hubert": str(SOURCE_DIR / "assets" / "hubert_base"),
-        "rmvpe": str(SOURCE_DIR / "assets" / "rmvpe" / "rmvpe.pt"),
+        "asset_repository": ASSET_REPOSITORY,
+        "asset_revision": ASSET_REVISION,
+        "hubert": str(hubert.parent),
+        "hubert_sha256": HUBERT_MODEL_SHA256,
+        "rmvpe": str(rmvpe),
+        "rmvpe_sha256": RMVPE_SHA256,
     }
 
 

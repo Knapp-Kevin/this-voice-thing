@@ -76,11 +76,12 @@ class ApiBridge(QObject):
             self.job_lock.release()
 
     def synthesize_stream(self, request):
-        """Prepare one native streaming synthesis session.
+        """Prepare one live synthesis session.
 
-        The GPU/API lock remains held until the returned chunk iterator is exhausted
-        or closed. For this first live slice only engines that expose a genuine
-        generate_streaming_pcm method are eligible.
+        Native engines may yield acoustic chunks before an utterance completes.
+        Segmented engines yield completed short speech sections while the next
+        section is generated. The GPU/API lock remains held until the returned
+        chunk iterator is exhausted or closed.
         """
         if not self.job_lock.acquire(timeout=self.LOAD_TIMEOUT):
             raise local_api.ApiError(503, "Another API request is still running.", "server_error")
@@ -89,18 +90,35 @@ class ApiBridge(QObject):
             job = self._begin_job(request)
             generator = job["generator"]
             model = generator["model"]
-            stream_method = getattr(model, "generate_streaming_pcm", None)
-            if not callable(stream_method) or not getattr(model, "native_streaming", False):
-                raise local_api.ApiError(
-                    409,
-                    "The selected model does not support native live audio streaming yet. "
-                    "Use VoxCPM2, or omit stream for normal buffered synthesis.",
-                )
-            text = generator["text"]
+            spoken_text = generator["text"]
             pronunciations = job.get("pronunciations")
             if pronunciations is not None:
-                text, _count = pronunciations.apply_section(text)
-            source = stream_method(text, audio_prompt_path=generator.get("audio_prompt_path"))
+                spoken_text, _count = pronunciations.apply_section(spoken_text)
+
+            native_method = getattr(model, "generate_streaming_pcm", None)
+            segmented_method = getattr(model, "generate_segmented_pcm", None)
+            if callable(native_method) and getattr(model, "native_streaming", False):
+                streaming_mode = "native"
+                watermark = "not-applied-live-path"
+                source = native_method(
+                    spoken_text,
+                    audio_prompt_path=generator.get("audio_prompt_path"),
+                )
+            elif callable(segmented_method) and getattr(model, "segmented_streaming", False):
+                streaming_mode = "segmented"
+                watermark = "applied-per-segment"
+                finishing = generator["finishing"]
+                source = segmented_method(
+                    spoken_text,
+                    language_id=generator.get("language_id"),
+                    paragraph_pause=finishing.paragraph_pause,
+                )
+            else:
+                raise local_api.ApiError(
+                    409,
+                    "The selected model does not support live audio streaming yet. "
+                    "Use VoxCPM2 or Kokoro, or omit stream for normal buffered synthesis.",
+                )
 
             def chunks():
                 try:
@@ -119,8 +137,8 @@ class ApiBridge(QObject):
                 "sample_rate": int(getattr(model, "sr", 48000)),
                 "channels": 1,
                 "sample_format": "s16le",
-                "streaming": "native",
-                "watermark": "not-applied-live-path",
+                "streaming": streaming_mode,
+                "watermark": watermark,
                 "model": job["model_label"],
                 "voice": job["voice_label"],
             }

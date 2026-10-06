@@ -230,6 +230,19 @@ class SoundboardStore:
         self.save()
         return pad
 
+    def move_pad(self, pad_id, direction):
+        for board in self.boards:
+            for index, pad in enumerate(board.pads):
+                if pad.id != pad_id:
+                    continue
+                target = index + int(direction)
+                if not (0 <= target < len(board.pads)):
+                    return False
+                board.pads[index], board.pads[target] = board.pads[target], board.pads[index]
+                self.save()
+                return True
+        return False
+
     def audio_path(self, pad):
         if pad is None or pad.kind != "audio" or not pad.audio_file:
             return ""

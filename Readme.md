@@ -265,10 +265,14 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.
-- Choose a **Route**: **Local output** or **External / virtual microphone**. Each profile remembers its own primary output device.
+- Choose a **Route**: **Local output**, **External / virtual microphone**, **Discord**, **Zoom**, **OBS**, or **Other app**. Each profile remembers its own primary output and optional monitor device.
 - External routes start **DISARMED** every time the app launches and must be armed explicitly before Speak or a soundboard pad can transmit to them.
 - Pick any audio output exposed by Windows/Qt, including speakers, headphones and compatible virtual audio-cable playback devices. Common virtual-device names are labeled as likely virtual, but the app does not require a specific vendor.
 - Enable **Also let me hear it through** to monitor the same PCM through a second device such as headphones. The monitor has an independent audio sink: if it fails or disappears, the primary external route continues.
+- **Use as microphone** shows a conservative best-effort match for the recording side of a recognized virtual cable. When a match exists, **Copy microphone name** puts the exact endpoint name on the clipboard.
+- **Setup…** shows app-specific instructions for Discord, Zoom, OBS, or a generic target application.
+- For Discord/Zoom/OBS/Other app profiles, Live Voice inspects the Windows recording endpoints and shows a conservative **Use as microphone** hint when it can identify the paired side of a known virtual cable. The hint can be copied directly.
+- **Setup…** shows app-specific instructions using the currently selected device names. It does not automate or modify third-party application settings.
 - **Test route** speaks a short phrase through the active route using the current voice.
 - A previously saved primary device that disappears is shown as unavailable. Live Voice does **not** silently fall back to the system speakers.
 - The page reports whether the selected item is using **Native streaming**, **Segmented streaming**, **Buffered fallback**, or **Cached** playback.
@@ -279,13 +283,13 @@ This implementation can now route to a normal local device or an **external/virt
 
 For example, with a typical virtual cable:
 
-1. In **Live Voice → Route**, choose **External / virtual microphone**.
+1. In **Live Voice → Route**, choose **Discord**, **Zoom**, **OBS**, or **External / virtual microphone**.
 2. Under **Send voice to**, choose the cable's playback endpoint, often named something like **CABLE Input**.
 3. Optionally enable monitoring and choose your headphones.
 4. Click **Arm external route**, then **Test route**.
 5. In Discord/Zoom/etc., choose the paired recording endpoint, often named something like **CABLE Output**, as the microphone.
 
-Exact names depend on the virtual-audio software. This Voice Thing stores the actual Windows/Qt device ID rather than assuming a vendor naming convention. Guided Discord/Zoom/OBS profile instructions, audio-clip pads, multiple-board management and global hotkeys remain later slices.
+Exact names depend on the virtual-audio software. This Voice Thing stores the actual Windows/Qt device ID rather than assuming a vendor naming convention. The app-specific profiles now include guided Discord/Zoom/OBS/Other App setup and conservative virtual-cable microphone pairing hints. Audio-clip pads, multiple-board management and global hotkeys remain later slices.
 
 The desktop Live Voice path does **not** call the local HTTP API. Both surfaces consume the same underlying model streaming capabilities.
 
@@ -294,6 +298,8 @@ Architecture and implementation planning live in:
 - [Live Voice architecture](docs/live-voice-architecture.md)
 - [Live Voice product specification](docs/live-voice-product-spec.md)
 - [Live Voice adversarial review](docs/live-voice-adversarial-review.md)
+- [Live Voice app routing guide](docs/live-voice-app-routing.md)
+- [Live Voice app routing guide](docs/live-voice-app-routing.md)
 
 </details>
 

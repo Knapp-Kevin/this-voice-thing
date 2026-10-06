@@ -167,7 +167,7 @@ class ApiServer:
                 return {"loading": True}
             raise local_api.ApiError(503, "A model is loading in the app; try again shortly.", "server_error")
         self.api_loading_entry = None
-        if self.is_generating or self.api_busy:
+        if self.is_generating or self.api_busy or getattr(self, "live_voice_busy", False):
             raise local_api.ApiError(503, "The app is generating right now; try again shortly.", "server_error")
         entry = self.api_find_entry(request.get("model"))
         voice = self.api_find_voice(request.get("voice"))

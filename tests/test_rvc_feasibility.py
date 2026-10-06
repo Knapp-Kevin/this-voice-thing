@@ -72,6 +72,20 @@ soundfile>=0.13,<1
     @mock.patch("this_voice_thing.engines.rvc_feasibility._source_revision")
     @mock.patch("this_voice_thing.engines.rvc_feasibility.subprocess.check_output")
     @mock.patch("this_voice_thing.engines.rvc_feasibility.Path.exists")
+    def test_status_reports_asset_pin(self, exists, check_output, source_revision):
+        exists.return_value = False
+        source_revision.return_value = None
+        check_output.return_value = "Python 3.12.9\n"
+
+        result = rvc.status()
+
+        self.assertEqual(result["asset_repository"], rvc.ASSET_REPOSITORY)
+        self.assertEqual(result["asset_revision"], rvc.ASSET_REVISION)
+        self.assertFalse(result["shared_assets_ready"])
+
+    @mock.patch("this_voice_thing.engines.rvc_feasibility._source_revision")
+    @mock.patch("this_voice_thing.engines.rvc_feasibility.subprocess.check_output")
+    @mock.patch("this_voice_thing.engines.rvc_feasibility.Path.exists")
     def test_status_requires_exact_revision(self, exists, check_output, source_revision):
         exists.return_value = True
         source_revision.return_value = "different-revision"

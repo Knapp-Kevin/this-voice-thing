@@ -36,6 +36,7 @@ class Pad:
     interrupt_policy: str = ""
     cache_policy: str = "auto"
     cache_key: str = ""
+    cache_provenance: str = ""
     audio_file: str = ""
     hotkey: str = ""
     favorite: bool = False
@@ -333,6 +334,25 @@ class SoundboardStore:
             handle.writeframes(bytes(pcm))
         os.replace(temp, path)
         return path
+
+    def clear_cache(self):
+        """Delete all cached TTS audio while preserving boards, pads, and imported clips."""
+        removed = 0
+        if os.path.isdir(self.cache_dir):
+            for name in os.listdir(self.cache_dir):
+                if not name.lower().endswith(".wav"):
+                    continue
+                try:
+                    os.remove(os.path.join(self.cache_dir, name))
+                    removed += 1
+                except OSError:
+                    pass
+        for board in self.boards:
+            for pad in board.pads:
+                pad.cache_key = ""
+                pad.cache_provenance = ""
+        self.save()
+        return removed
 
     def garbage_collect_cache(self):
         if not os.path.isdir(self.cache_dir):

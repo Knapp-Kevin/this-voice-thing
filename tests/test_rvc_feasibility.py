@@ -51,7 +51,8 @@ soundfile>=0.13,<1
 
             self.assertEqual(command[0], str(rvc.venv_python()))
             self.assertIn(str(rvc.SOURCE_DIR / "infer" / "cli.py"), command)
-            self.assertIn("3", command)\n            self.assertIn("--overwrite", command)
+            self.assertIn("3", command)
+            self.assertIn("--overwrite", command)
 
             with self.assertRaises(ValueError):
                 rvc.build_offline_command(

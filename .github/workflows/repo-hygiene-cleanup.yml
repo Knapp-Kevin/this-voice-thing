@@ -1,0 +1,61 @@
+name: One-time repository hygiene cleanup
+
+on:
+  push:
+    branches:
+      - feat/live-voice-qa
+    paths:
+      - ".github/workflows/repo-hygiene-cleanup.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prune-stale-branches:
+    if: github.event.head_commit.message == 'chore: prune stale repository branches'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete audited stale branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branches=(
+            'docs/dummy-proof-installation-20261005'
+            'docs/live-voice-advanced-integrations'
+            'docs/live-voice-workbench'
+            'feat/kokoro-segmented-streaming'
+            'feat/live-stream-cancellation'
+            'feat/live-voice-app-profiles'
+            'feat/live-voice-audio-pads'
+            'feat/live-voice-board-defaults'
+            'feat/live-voice-global-hotkeys'
+            'feat/live-voice-hardening-ui'
+            'feat/live-voice-interactions'
+            'feat/live-voice-local'
+            'feat/live-voice-multiple-boards'
+            'feat/live-voice-routing'
+            'feat/live-voice-safety'
+            'feat/live-voice-soundboard'
+            'feat/native-voxcpm-streaming'
+            'rebase/kokoro-segmented-streaming'
+            'rebase/live-stream-cancellation'
+            'rebase/live-voice-app-profiles-v2'
+            'rebase/live-voice-app-profiles-v3'
+            'rebase/live-voice-audio-pads-v2'
+            'rebase/live-voice-board-defaults-v2'
+            'rebase/live-voice-global-hotkeys-v2'
+            'rebase/live-voice-interactions-v2'
+            'rebase/live-voice-multiple-boards-v2'
+            'rebase/live-voice-qa-v2'
+            'rebase/live-voice-routing-v2'
+            'rebase/live-voice-safety-v2'
+            'rebase/live-voice-soundboard-v2'
+            'rebuild/live-voice-extended-v2'
+          )
+          for branch in "${branches[@]}"; do
+            echo "Deleting $branch"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}"
+          done

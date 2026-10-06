@@ -62,6 +62,32 @@ class SoundboardStoreTests(unittest.TestCase):
             self.assertEqual(handle.getframerate(), 48000)
             self.assertEqual(handle.readframes(480), pcm)
 
+    def test_audio_pad_import_is_owned_persisted_and_deleted(self):
+        source = os.path.join(self.temp.name, "source.wav")
+        with wave.open(source, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16000)
+            handle.writeframes(b"\x01\x00" * 32)
+
+        pad = self.store.import_audio_pad(source, "Air horn")
+        owned = self.store.audio_path(pad)
+
+        self.assertTrue(os.path.isfile(owned))
+        self.assertNotEqual(os.path.abspath(source), os.path.abspath(owned))
+
+        reloaded = SoundboardStore(self.temp.name)
+        found = reloaded.get_pad(pad.id)
+        self.assertEqual(found.kind, "audio")
+        self.assertTrue(os.path.isfile(reloaded.audio_path(found)))
+
+        reloaded.remove_pad(found.id)
+        self.assertFalse(os.path.exists(owned))
+
+    def test_audio_path_rejects_directory_escape(self):
+        pad = Pad(label="Bad", text="", kind="audio", audio_file="../outside.wav")
+        self.assertEqual(self.store.audio_path(pad), "")
+
     def test_removing_last_reference_garbage_collects_cache(self):
         pad = self.store.add_pad(Pad(label="Test", text="Hello."))
         key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})

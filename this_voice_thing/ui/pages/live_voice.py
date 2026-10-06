@@ -1,5 +1,6 @@
 """Live Voice page: type text and send generated PCM directly to an audio device."""
 
+import json
 import os
 
 from PySide6.QtCore import Qt
@@ -27,6 +28,11 @@ from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
 from this_voice_thing.ui import theme as ui_theme
 
 
+MAX_LIVE_QUEUE_ITEMS = 25
+MAX_LIVE_QUEUE_SECONDS = 600.0
+APPROX_SPEECH_CHARS_PER_SECOND = 13.0
+
+
 class LiveVoicePage:
     """Live Speak UI mixed into ChatterboxApp."""
 
@@ -38,6 +44,7 @@ class LiveVoicePage:
         self.live_voice_current = None
         self.live_voice_stop_all_requested = False
         self.live_voice_last_error = ""
+        self.live_last_generation_metrics = {}
         self.live_audio_devices = []
         self.live_audio_inputs = []
         self.soundboard_store = soundboard.SoundboardStore(self.script_dir)
@@ -84,6 +91,12 @@ class LiveVoicePage:
         self.live_mode_label = QLabel("Buffered")
         self.live_mode_label.setObjectName("Muted")
         voice_row.addWidget(self.live_mode_label)
+        self.live_voice_origin_label = QLabel("Origin: default")
+        self.live_voice_origin_label.setObjectName("Muted")
+        voice_row.addWidget(self.live_voice_origin_label)
+        self.live_provenance_label = QLabel("Provenance: idle")
+        self.live_provenance_label.setObjectName("Muted")
+        voice_row.addWidget(self.live_provenance_label)
         route_layout.addLayout(voice_row)
 
         favorite_voice_row = QHBoxLayout()
@@ -180,6 +193,9 @@ class LiveVoicePage:
         self.live_stop_all_button.clicked.connect(self.live_stop_all)
         self.live_stop_all_button.setEnabled(False)
         controls.addWidget(self.live_stop_all_button)
+        diagnostics = self._link(QPushButton("Copy diagnostics"))
+        diagnostics.clicked.connect(self.copy_live_diagnostics)
+        controls.addWidget(diagnostics)
         controls.addStretch(1)
         self.live_status_label = QLabel("Ready")
         self.live_status_label.setObjectName("Muted")
@@ -198,10 +214,25 @@ class LiveVoicePage:
         repeat = self._link(QPushButton("Repeat last"))
         repeat.clicked.connect(self.live_repeat_last)
         queue_actions.addWidget(repeat)
+        remove = self._link(QPushButton("Remove selected"))
+        remove.clicked.connect(self.live_remove_selected_queue_item)
+        queue_actions.addWidget(remove)
+        move_up = self._link(QPushButton("Move up"))
+        move_up.clicked.connect(lambda: self.live_move_selected_queue_item(-1))
+        queue_actions.addWidget(move_up)
+        move_down = self._link(QPushButton("Move down"))
+        move_down.clicked.connect(lambda: self.live_move_selected_queue_item(1))
+        queue_actions.addWidget(move_down)
         clear = self._link(QPushButton("Clear queued"))
         clear.clicked.connect(self.live_clear_queue)
         queue_actions.addWidget(clear)
+        clear_history = self._link(QPushButton("Clear history"))
+        clear_history.clicked.connect(self.live_clear_history)
+        queue_actions.addWidget(clear_history)
         queue_actions.addStretch(1)
+        self.live_queue_pressure_label = QLabel("0 queued")
+        self.live_queue_pressure_label.setObjectName("Muted")
+        queue_actions.addWidget(self.live_queue_pressure_label)
         queue_layout.addLayout(queue_actions)
         layout.addWidget(queue_card, 1)
 
@@ -303,6 +334,9 @@ class LiveVoicePage:
         behavior_pad = self._link(QPushButton("Behavior…"))
         behavior_pad.clicked.connect(self.set_selected_soundboard_behavior)
         board_actions.addWidget(behavior_pad)
+        clear_cache = self._link(QPushButton("Clear cache"))
+        clear_cache.clicked.connect(self.clear_soundboard_cache)
+        board_actions.addWidget(clear_cache)
         board_actions.addStretch(1)
         self.soundboard_status_label = QLabel("Static TTS pads cache locally after their first successful generation.")
         self.soundboard_status_label.setObjectName("Muted")

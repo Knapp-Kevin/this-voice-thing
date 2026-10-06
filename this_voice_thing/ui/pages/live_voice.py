@@ -1622,6 +1622,124 @@ class LiveVoicePage:
             self.refresh_live_global_hotkeys()
             self.soundboard_status_label.setText(f"Moved {pad.label}.")
 
+    def toggle_selected_soundboard_favorite(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        pad.favorite = not bool(pad.favorite)
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+        self.soundboard_status_label.setText(
+            f"{'Favorited' if pad.favorite else 'Unfavorited'} {pad.label}"
+        )
+
+    def edit_selected_soundboard_tags(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        current = ", ".join(pad.tags or [])
+        value, accepted = QInputDialog.getText(
+            self,
+            "Soundboard tags",
+            "Comma-separated tags:",
+            text=current,
+        )
+        if not accepted:
+            return
+        seen = set()
+        tags = []
+        for item in value.split(","):
+            tag = item.strip()
+            key = tag.casefold()
+            if tag and key not in seen:
+                seen.add(key)
+                tags.append(tag)
+        pad.tags = tags
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+
+    def set_selected_soundboard_behavior(self):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        options = [
+            ("Use board default", ""),
+            ("Queue", "queue"),
+            ("Interrupt current", "interrupt"),
+            ("Ignore if busy", "ignore"),
+        ]
+        current_value = pad.interrupt_policy or ""
+        current_index = next(
+            (
+                index
+                for index, (_label, value) in enumerate(options)
+                if value == current_value
+            ),
+            0,
+        )
+        label, accepted = QInputDialog.getItem(
+            self,
+            "Pad trigger behavior",
+            "When this pad is triggered:",
+            [item[0] for item in options],
+            current_index,
+            False,
+        )
+        if not accepted:
+            return
+        pad.interrupt_policy = next(
+            value for option_label, value in options if option_label == label
+        )
+        self.soundboard_store.save()
+        self.refresh_soundboard(select_id=pad.id)
+
+    def _soundboard_trigger_policy(self, pad):
+        if pad.interrupt_policy in ("queue", "interrupt", "ignore"):
+            return pad.interrupt_policy
+        board = self.soundboard_store.active_board()
+        if board is not None and board.default_interrupt_policy in (
+            "queue",
+            "interrupt",
+            "ignore",
+        ):
+            return board.default_interrupt_policy
+        return "queue"
+
+    def _soundboard_is_busy(self):
+        return bool(
+            self.live_speech_thread is not None
+            or self.live_voice_queue
+            or self.live_audio_output.is_playing()
+            or self.live_monitor_output.is_playing()
+        )
+
+    def _enqueue_soundboard_item(self, item, pad, interactive=True):
+        policy = self._soundboard_trigger_policy(pad)
+        busy = self._soundboard_is_busy()
+        if policy == "ignore" and busy:
+            self.soundboard_status_label.setText(
+                f"{pad.label}: ignored because Live Voice is busy."
+            )
+            return False
+
+        if not self._enqueue_live_item(item):
+            self.soundboard_status_label.setText(
+                f"{pad.label}: queue limit reached."
+            )
+            return False
+
+        if policy == "interrupt" and busy:
+            # _enqueue_live_item appended the new request. Move it to the front so it
+            # becomes the next utterance after the current output is cancelled.
+            queued = self.live_voice_queue.pop()
+            self.live_voice_queue.insert(0, queued)
+            self._refresh_live_queue()
+            self.live_stop_current()
+
+        if self.live_speech_thread is None:
+            self._live_start_next()
+        return True
+
     def selected_soundboard_pad(self):
         item = self.soundboard_list.currentItem()
         if item is None:
@@ -1666,6 +1784,7 @@ class LiveVoicePage:
         if route_problem:
             self._soundboard_problem("Soundboard route", route_problem, interactive)
             return
+
         if pad.kind == "audio":
             path = self.soundboard_store.audio_path(pad)
             if not path or not os.path.isfile(path):
@@ -1675,17 +1794,14 @@ class LiveVoicePage:
                     interactive,
                 )
                 return
-            self.live_voice_queue.append({
+            item = {
                 "text": pad.label,
                 "label": pad.label,
                 "audio_path": path,
                 "soundboard_pad_id": pad.id,
-            })
-            self.soundboard_status_label.setText(f"{pad.label}: audio clip")
-            self._refresh_live_queue()
-            self.live_voice_stop_all_requested = False
-            if self.live_speech_thread is None:
-                self._live_start_next()
+            }
+            if self._enqueue_soundboard_item(item, pad, interactive):
+                self.soundboard_status_label.setText(f"{pad.label}: audio clip")
             return
 
         expected = self._soundboard_cache_key(pad)
@@ -1695,42 +1811,44 @@ class LiveVoicePage:
             and self.soundboard_store.has_cache(expected)
         )
         if cached:
-            self.live_voice_queue.append({
+            item = {
                 "text": pad.text,
                 "label": pad.label,
                 "cached_path": self.soundboard_store.cache_path(expected),
+                "cache_provenance": pad.cache_provenance,
                 "soundboard_pad_id": pad.id,
-            })
-            self.soundboard_status_label.setText(f"{pad.label}: cached")
-        else:
-            if self.live_speech_thread is None and (
-                getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy
-            ):
-                self._soundboard_problem(
-                    "Soundboard",
-                    "This pad needs to be regenerated, but the model is busy with another task.",
-                    interactive,
-                )
-                return
-            if not self._current_context_matches_pad(pad):
-                self._soundboard_problem(
-                    "Soundboard cache needs rebuilding",
-                    f"{pad.label} no longer has a valid cache and its saved voice/model is not active. "
-                    "Select that voice/model again, then trigger the pad to rebuild it.",
-                    interactive,
-                )
-                return
-            self.live_voice_queue.append({
-                "text": pad.text,
-                "label": pad.label,
-                "soundboard_pad_id": pad.id,
-                "cache_key": expected,
-            })
-            self.soundboard_status_label.setText(f"{pad.label}: generating and caching…")
-        self._refresh_live_queue()
-        self.live_voice_stop_all_requested = False
-        if self.live_speech_thread is None:
-            self._live_start_next()
+            }
+            if self._enqueue_soundboard_item(item, pad, interactive):
+                self.soundboard_status_label.setText(f"{pad.label}: cached")
+            return
+
+        if self.live_speech_thread is None and (
+            getattr(self, "model_is_loading", False) or self.is_generating or self.api_busy
+        ):
+            self._soundboard_problem(
+                "Soundboard",
+                "This pad needs to be regenerated, but the model is busy with another task.",
+                interactive,
+            )
+            return
+        if not self._current_context_matches_pad(pad):
+            self._soundboard_problem(
+                "Soundboard cache needs rebuilding",
+                f"{pad.label} no longer has a valid cache and its saved voice/model is not active. "
+                "Select that voice/model again, then trigger the pad to rebuild it.",
+                interactive,
+            )
+            return
+        item = {
+            "text": pad.text,
+            "label": pad.label,
+            "soundboard_pad_id": pad.id,
+            "cache_key": expected,
+        }
+        if self._enqueue_soundboard_item(item, pad, interactive):
+            self.soundboard_status_label.setText(
+                f"{pad.label}: generating and caching…"
+            )
 
     def delete_selected_soundboard_pad(self):
         pad = self.selected_soundboard_pad()
@@ -1749,18 +1867,60 @@ class LiveVoicePage:
         board = self.soundboard_store.active_board()
         if board is None:
             return
-        for pad in board.pads:
+
+        query = (
+            self.soundboard_search_input.text().strip().casefold()
+            if hasattr(self, "soundboard_search_input")
+            else ""
+        )
+        favorites_only = (
+            self.soundboard_favorites_only.isChecked()
+            if hasattr(self, "soundboard_favorites_only")
+            else False
+        )
+
+        for index, pad in enumerate(board.pads, 1):
+            searchable = " ".join(
+                [pad.label, pad.text or "", " ".join(pad.tags or [])]
+            ).casefold()
+            if query and query not in searchable:
+                continue
+            if favorites_only and not pad.favorite:
+                continue
+
             if pad.kind == "audio":
                 audio_path = self.soundboard_store.audio_path(pad)
-                suffix = " · audio clip" if audio_path and os.path.isfile(audio_path) else " · audio missing"
+                suffix = (
+                    " · audio clip"
+                    if audio_path and os.path.isfile(audio_path)
+                    else " · audio missing"
+                )
                 tooltip = audio_path or "Audio file missing"
             else:
                 expected = self._soundboard_cache_key(pad)
-                cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
+                cached = (
+                    pad.cache_key == expected
+                    and self.soundboard_store.has_cache(expected)
+                )
                 suffix = " · cached" if cached else " · rebuild needed"
                 tooltip = pad.text
+
+            if pad.favorite:
+                suffix = " ★" + suffix
             if pad.hotkey:
                 suffix += f" · {pad.hotkey}"
+            if pad.interrupt_policy:
+                suffix += f" · {pad.interrupt_policy}"
+            if index <= 9:
+                suffix += f"  [Alt+{index}]"
+
+            if pad.tags:
+                tooltip = (tooltip + "\n" if tooltip else "") + "Tags: " + ", ".join(pad.tags)
+            tooltip = (
+                (tooltip + "\n" if tooltip else "")
+                + f"Trigger behavior: {pad.interrupt_policy or 'board default'}"
+            )
+
             self.soundboard_list.addItem(f"{pad.label}{suffix}")
             item = self.soundboard_list.item(self.soundboard_list.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, pad.id)

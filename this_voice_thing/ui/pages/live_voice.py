@@ -3,6 +3,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QHBoxLayout,
@@ -33,6 +34,7 @@ class LiveVoicePage:
         self.live_voice_stop_all_requested = False
         self.live_voice_last_error = ""
         self.live_audio_devices = []
+        self.live_audio_inputs = []
         self.soundboard_store = soundboard.SoundboardStore(self.script_dir)
         self.live_route_store = live_routes.RouteProfileStore(
             self.app_settings.setdefault("live_voice", {})
@@ -92,6 +94,9 @@ class LiveVoicePage:
         self.live_route_test_button = QPushButton("Test route")
         self.live_route_test_button.clicked.connect(self.live_test_route)
         profile_row.addWidget(self.live_route_test_button)
+        self.live_route_setup_button = QPushButton("Setup…")
+        self.live_route_setup_button.clicked.connect(self.show_live_app_setup)
+        profile_row.addWidget(self.live_route_setup_button)
         self.live_route_state = QLabel("LOCAL ONLY")
         self.live_route_state.setObjectName("Muted")
         profile_row.addWidget(self.live_route_state)
@@ -107,6 +112,17 @@ class LiveVoicePage:
         refresh.clicked.connect(self.refresh_live_audio_devices)
         output_row.addWidget(refresh)
         route_layout.addLayout(output_row)
+
+        paired_row = QHBoxLayout()
+        paired_row.addWidget(QLabel("Use as microphone"))
+        self.live_paired_input_label = QLabel("Not applicable for local output")
+        self.live_paired_input_label.setObjectName("Muted")
+        self.live_paired_input_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        paired_row.addWidget(self.live_paired_input_label, 1)
+        self.live_copy_mic_button = self._link(QPushButton("Copy microphone name"))
+        self.live_copy_mic_button.clicked.connect(self.copy_live_paired_input_name)
+        paired_row.addWidget(self.live_copy_mic_button)
+        route_layout.addLayout(paired_row)
 
         monitor_row = QHBoxLayout()
         self.live_monitor_checkbox = QCheckBox("Also let me hear it through")
@@ -195,6 +211,7 @@ class LiveVoicePage:
         self.pages.addWidget(page)
         try:
             self.media_devices.audioOutputsChanged.connect(self.refresh_live_audio_devices)
+            self.media_devices.audioInputsChanged.connect(self.refresh_live_audio_devices)
         except Exception:
             pass
         self.refresh_live_audio_devices()
@@ -278,6 +295,7 @@ class LiveVoicePage:
         if not hasattr(self, "live_output_combo"):
             return
         self.live_audio_devices = list(self.media_devices.audioOutputs())
+        self.live_audio_inputs = list(self.media_devices.audioInputs())
         profile = self.active_live_route_profile()
 
         missing_primary = self._fill_live_device_combo(
@@ -387,11 +405,89 @@ class LiveVoicePage:
             self.live_external_armed = True
         self.update_live_route_state()
 
+    def paired_live_input_name(self):
+        profile = self.active_live_route_profile()
+        if not profile.external:
+            return ""
+        output = self.current_live_audio_device()
+        if output is None:
+            return ""
+        input_names = [device.description() for device in self.live_audio_inputs]
+        return live_routes.paired_input_hint(output.description(), input_names)
+
+    def refresh_live_app_setup_hint(self):
+        if not hasattr(self, "live_paired_input_label"):
+            return
+        profile = self.active_live_route_profile()
+        if not profile.external:
+            self.live_paired_input_label.setText("Not applicable for local output")
+            self.live_paired_input_label.setToolTip("")
+            self.live_copy_mic_button.setVisible(False)
+            return
+
+        paired = self.paired_live_input_name()
+        self.live_copy_mic_button.setVisible(bool(paired))
+        if paired:
+            self.live_paired_input_label.setText(paired)
+            self.live_paired_input_label.setToolTip(
+                "Best-effort match from the selected virtual playback endpoint. "
+                "Choose this recording endpoint as the microphone/input in the target app."
+            )
+        elif self.current_live_audio_device() is None:
+            self.live_paired_input_label.setText("Choose an external output first")
+            self.live_paired_input_label.setToolTip("")
+        else:
+            self.live_paired_input_label.setText(
+                "No paired recording endpoint could be identified automatically"
+            )
+            self.live_paired_input_label.setToolTip(
+                "Open the target app's microphone settings and choose the recording side "
+                "of the virtual cable manually."
+            )
+
+    def copy_live_paired_input_name(self):
+        paired = self.paired_live_input_name()
+        if not paired:
+            return
+        QApplication.clipboard().setText(paired)
+        self.live_status_label.setText("Microphone/input device name copied.")
+
+    def show_live_app_setup(self):
+        profile = self.active_live_route_profile()
+        if not profile.external:
+            QMessageBox.information(
+                self,
+                "Local output",
+                "Local output needs no third-party microphone setup. Choose your speakers or headphones and use Test route.",
+            )
+            return
+
+        setup = live_routes.APP_SETUP.get(profile.app) or live_routes.APP_SETUP["generic"]
+        paired = self.paired_live_input_name()
+        output = self.current_live_audio_device()
+        output_name = output.description() if output is not None else "not selected"
+        mic_name = paired or "the recording side of your selected virtual audio cable"
+
+        numbered = "\n\n".join(
+            f"{index}. {step}" for index, step in enumerate(setup["steps"], 1)
+        )
+        QMessageBox.information(
+            self,
+            setup["title"],
+            f"This Voice Thing output:\n{output_name}\n\n"
+            f"Target app microphone/input:\n{mic_name}\n\n"
+            f"{numbered}\n\n"
+            "The microphone pairing is advisory because Windows audio devices do not expose "
+            "a universal render-to-capture relationship. Device names can also vary by driver version.",
+        )
+
     def update_live_route_state(self):
         if not hasattr(self, "live_route_state"):
             return
         profile = self.active_live_route_profile()
         device_ok = self.current_live_audio_device() is not None
+        self.live_route_setup_button.setVisible(profile.external)
+        self.refresh_live_app_setup_hint()
         if profile.external:
             self.live_arm_button.setVisible(True)
             self.live_arm_button.setText(
@@ -882,13 +978,14 @@ class LiveVoicePage:
 
     def _set_live_generation_busy(self, busy):
         self.live_voice_busy = bool(busy)
-        audible = self.live_audio_output.is_playing()
+        audible = self.live_audio_output.is_playing() or self.live_monitor_output.is_playing()
         self.live_stop_current_button.setEnabled(busy or audible)
         self.live_stop_all_button.setEnabled(busy or audible or bool(self.live_voice_queue))
         self.live_output_combo.setEnabled(not busy)
         self.live_route_profile_combo.setEnabled(not busy)
         self.live_arm_button.setEnabled(not busy)
         self.live_route_test_button.setEnabled(not busy)
+        self.live_route_setup_button.setEnabled(not busy)
         self.live_monitor_checkbox.setEnabled(not busy)
         self.live_monitor_combo.setEnabled(not busy and self.live_monitor_checkbox.isChecked())
         other_busy = getattr(self, "model_is_loading", False) or self.api_busy

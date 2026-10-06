@@ -8,6 +8,16 @@ from this_voice_thing.integrations.local_api import LocalApiServer
 class FakeBackend:
     def __init__(self):
         self.stream_request = None
+        handle = tempfile.NamedTemporaryFile(delete=False)
+        handle.write(b"buffered-audio")
+        handle.close()
+        self.buffered_path = handle.name
+
+    def close(self):
+        try:
+            os.remove(self.buffered_path)
+        except OSError:
+            pass
 
     def health(self):
         return {"status": "ready"}
@@ -17,6 +27,13 @@ class FakeBackend:
 
     def voices(self):
         return []
+
+    def synthesize(self, request):
+        return {
+            "path": self.buffered_path,
+            "mime": "audio/mpeg",
+            "temporary": False,
+        }
 
     def synthesize_stream(self, request):
         self.stream_request = request
@@ -38,6 +55,7 @@ class StreamingApiTests(unittest.TestCase):
 
     def tearDown(self):
         self.server.stop()
+        self.backend.close()
 
     def request(self, payload):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.port, timeout=3)
@@ -52,6 +70,14 @@ class StreamingApiTests(unittest.TestCase):
         headers = dict(response.getheaders())
         connection.close()
         return response.status, headers, body
+
+    def test_buffered_speech_still_returns_content_length(self):
+        status, headers, body = self.request({"input": "Buffered still works."})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"buffered-audio")
+        self.assertEqual(headers["Content-Length"], str(len(body)))
+        self.assertNotIn("Transfer-Encoding", headers)
 
     def test_streams_pcm_with_chunked_transfer(self):
         status, headers, body = self.request({

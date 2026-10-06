@@ -5,15 +5,18 @@ on:
   pull_request:
     paths:
       - "this_voice_thing/core/live_voice.py"
+      - "this_voice_thing/core/microphone_audio.py"
       - "this_voice_thing/core/live_routes.py"
       - "this_voice_thing/core/soundboard.py"
       - "this_voice_thing/ui/live_audio.py"
+      - "this_voice_thing/ui/live_capture.py"
       - "this_voice_thing/ui/global_hotkeys.py"
       - "this_voice_thing/ui/pages/live_voice.py"
       - "this_voice_thing/ui/pages/model_loading.py"
       - "tests/test_live_audio.py"
       - "tests/test_live_routes.py"
       - "tests/test_live_voice.py"
+      - "tests/test_microphone_audio.py"
       - "tests/test_soundboard.py"
       - "tests/test_global_hotkeys.py"
       - ".github/workflows/live-voice-ci.yml"
@@ -74,9 +77,11 @@ jobs:
         run: >-
           python -m py_compile
           this_voice_thing/core/live_voice.py
+          this_voice_thing/core/microphone_audio.py
           this_voice_thing/core/live_routes.py
           this_voice_thing/core/soundboard.py
           this_voice_thing/ui/live_audio.py
+          this_voice_thing/ui/live_capture.py
           this_voice_thing/ui/global_hotkeys.py
           this_voice_thing/ui/pages/live_voice.py
           this_voice_thing/ui/pages/model_loading.py
@@ -89,5 +94,6 @@ jobs:
           tests.test_live_audio
           tests.test_live_routes
           tests.test_live_voice
+          tests.test_microphone_audio
           tests.test_soundboard
           tests.test_global_hotkeys

@@ -133,6 +133,7 @@ When the app opens:
 
 Once that works, the rest of the app is safe to explore:
 
+- **Live Voice** speaks typed text directly through a selected audio output, with queue and stop controls.
 - **Studio** creates, clones, remixes and refines voices.
 - **Voices** stores the voices you save.
 - **Transcribe** turns recordings into text.
@@ -230,8 +231,9 @@ Current additions include:
 - **Transcription.** Turn audio into text with Whisper, save it as text or subtitles, fill in a voice clip's transcript, or send it back to Generate.
 - **Pronunciation controls and subtitles.** Maintain a pronunciation dictionary and generate SRT or WebVTT from the known generation timeline.
 - **Audio finishing.** Adjust paragraph pauses, even out volume, trim silence, change speed or pitch, and export WAV, FLAC or MP3.
+- **Live Voice.** Type a line and send the selected voice directly to speakers, headphones or another Windows audio output without first rendering a file. Native and segmented engines begin playing while generation is still running; other engines use a buffered fallback.
 - **A local HTTP API.** Use the same engines and voice library from other software through OpenAI-compatible or native endpoints.
-- **A redesigned desktop interface.** Generate, Studio, Voices, Transcribe, Model, Advanced and Log pages with light and dark themes.
+- **A redesigned desktop interface.** Generate, Live Voice, Studio, Voices, Transcribe, Model, Advanced and Log pages with light and dark themes.
 
 In other words, calling the whole thing “Chatterbox UI” eventually became less a name and more a historical anecdote.
 
@@ -246,6 +248,33 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - Variation and take-number controls for repeatable takes where supported.
 - Language selection based on the active model.
 - A built-in player with history, seeking and optional auto-play.
+
+</details>
+
+<details>
+<summary><strong>Live Voice</strong></summary>
+
+**Live Voice** is the direct-to-device speech surface. It uses the same loaded voice, model, language and pronunciation settings as Generate, but sends PCM to a selected audio output instead of waiting for a completed file.
+
+- Type a line and click **Speak**, or press **Ctrl+Enter**.
+- Submit more lines while speech is active; they are queued in order.
+- **Stop current** silences the current utterance immediately and keeps later queued items.
+- **Stop all** discards audible buffered audio and clears the queue.
+- **Repeat last** resubmits the most recent completed line.
+- Pick any audio output exposed by Windows/Qt, including speakers, headphones and compatible virtual audio-cable playback devices.
+- The page reports whether the selected model is using **Native streaming**, **Segmented streaming**, or a **Buffered fallback**.
+- VoxCPM2 uses native model streaming. Kokoro uses short segmented generation. Other compatible loaded engines can still speak here after completing the utterance.
+- Live playback has its own bounded audio buffer and converts the model's native sample rate when the selected device requires a different supported rate.
+
+This first implementation is **local-output first**. It can target a virtual audio device if one is already installed, but guided Discord/Zoom/OBS route profiles, monitoring, the persistent soundboard and global hotkeys are tracked as the next Live Voice slices. The app does not yet install a virtual microphone driver itself.
+
+The desktop Live Voice path does **not** call the local HTTP API. Both surfaces consume the same underlying model streaming capabilities.
+
+Architecture and implementation planning live in:
+
+- [Live Voice architecture](docs/live-voice-architecture.md)
+- [Live Voice product specification](docs/live-voice-product-spec.md)
+- [Live Voice adversarial review](docs/live-voice-adversarial-review.md)
 
 </details>
 
@@ -381,7 +410,14 @@ Discovery endpoints: `GET /v1/health`, `GET /v1/models`, `GET /v1/voices`.
 
 ### Experimental live PCM streaming
 
-VoxCPM2 can return audio while the model is still generating it. This is a deliberately raw live path rather than a completed render:
+The local API and the desktop Live Voice page share the same live model capabilities.
+
+- **VoxCPM2 · native:** returns acoustic PCM chunks while one utterance is still being generated.
+- **Kokoro · segmented:** generates short speech sections and returns each completed section while later sections continue.
+
+The API remains useful for other programs; the desktop Live Voice page consumes the model stream directly and does not loop back through HTTP.
+
+For VoxCPM2 voice cloning:
 
 ```bash
 curl http://127.0.0.1:8765/v1/audio/speech \
@@ -390,9 +426,9 @@ curl http://127.0.0.1:8765/v1/audio/speech \
   --no-buffer > speech.pcm
 ```
 
-The stream is mono signed 16-bit little-endian PCM at the model's native sample rate (48 kHz for VoxCPM2). Response headers include `X-Audio-Sample-Rate`, `X-Audio-Sample-Format`, `X-Streaming-Mode` and `X-Audio-Watermark`.
+The stream is mono signed 16-bit little-endian PCM at the model's native sample rate (48 kHz for VoxCPM2, 24 kHz for Kokoro). Response headers include `X-Audio-Sample-Rate`, `X-Audio-Sample-Format`, `X-Streaming-Mode` (`native` or `segmented`) and `X-Audio-Watermark`.
 
-The live path intentionally does **not** run whole-waveform finishing such as speed/pitch processing, final silence trimming, global volume levelling, subtitle alignment or the normal Perth watermark. Those still apply to completed renders. Streaming currently requires `speed=1.0` and raw PCM output; the API rejects incompatible options rather than silently changing their meaning.
+Live output intentionally does **not** run whole-waveform finishing such as speed/pitch processing, final global volume levelling or subtitle alignment. VoxCPM2's raw native path also does not currently apply the normal Perth watermark. Kokoro's segmented path retains its existing per-section watermark and the app's clause/sentence/paragraph seam pauses. Streaming currently requires `speed=1.0` and raw PCM output; the API rejects incompatible options rather than silently changing their meaning.
 
 To measure actual latency and sustained throughput on the current machine:
 
@@ -400,7 +436,7 @@ To measure actual latency and sustained throughput on the current machine:
 python scripts/benchmark_live_api.py --model "VoxCPM2 voice cloning" --voice "YOUR CLIP VOICE"
 ```
 
-The benchmark reports time to first audio (TTFA) and real-time factor (RTF). RTF below 1.0 means synthesis stays ahead of playback; lower is better.
+The benchmark reports time to first audio (TTFA), real-time factor (RTF), and on the cancellation branch how quickly a disconnected stream releases the generation slot. RTF below 1.0 means synthesis stays ahead of playback; lower is better.
 
 The architecture, live-mode definitions, provenance policy, validation gates and planned merge order are documented in [docs/live-tts-architecture.md](docs/live-tts-architecture.md).
 
@@ -515,11 +551,12 @@ this-voice-thing/
 │  ├─ ui/
 │  │  ├─ main_window.py         the window: sidebar, page layout, settings (run as __main__)
 │  │  ├─ pages/                 one module per page, mixed into the window:
-│  │  │                         generate, generation, documents, estimates, finishing, engine_controls, player,
+│  │  │                         generate, generation, live_voice, documents, estimates, finishing, engine_controls, player,
 │  │  │                         studio, voice, voice_picker, library, voice_use, recording, transcribe, models, discover, model_loading,
 │  │  │                         model_settings, advanced, api_server, pronunciations
 │  │  ├─ dialogs/               recording, find/add models, voices and cast, pronunciation, Google Docs
 │  │  ├─ threads.py             model loading, generation, installs, speech and transcription threads
+│  │  ├─ live_audio.py          QAudioSink streaming playback, buffering and sample-rate conversion
 │  │  ├─ api_bridge.py          hands local API requests to the window
 │  │  ├─ common.py              start-up setup, model config and shared constants
 │  │  ├─ widgets.py             small reusable widgets
@@ -530,6 +567,7 @@ this-voice-thing/
 │  │  ├─ worker.py              shared worker/environment support for the other engines
 │  │  └─ qwen.py, kokoro.py, voxcpm.py, omnivoice.py, vibevoice.py
 │  ├─ core/
+│  │  ├─ live_voice.py          shared LiveSpeechSession and typed PCM AudioFrame
 │  │  ├─ model_registry.py      engines, capabilities, licenses, hardware needs, Hugging Face discovery
 │  │  ├─ documents.py           document loading, sectioning, conversation scripts
 │  │  ├─ audio_effects.py       joining, finishing, speed/pitch, export

@@ -84,13 +84,38 @@ class CachedSpeechSessionTests(unittest.TestCase):
                 output.setframerate(24000)
                 output.writeframes(pcm)
 
-            session = CachedSpeechSession(path)
+            session = CachedSpeechSession(
+                path, provenance="live-native-unwatermarked"
+            )
             frames = list(session.frames())
 
             self.assertEqual(session.delivery_mode, "cached")
             self.assertEqual(session.sample_rate, 24000)
             self.assertEqual(b"".join(frame.pcm for frame in frames), pcm)
-            self.assertEqual(session.metrics()["provenance"], "soundboard-cache")
+            self.assertEqual(
+                session.metrics()["provenance"],
+                "live-native-unwatermarked",
+            )
+        finally:
+            os.remove(path)
+
+    def test_cached_wav_defaults_to_unknown_source_provenance(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        path = handle.name
+        handle.close()
+        try:
+            with wave.open(path, "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(16000)
+                output.writeframes(b"\x00\x00")
+
+            session = CachedSpeechSession(path)
+
+            self.assertEqual(
+                session.metrics()["provenance"],
+                "soundboard-cache-unknown",
+            )
         finally:
             os.remove(path)
 

@@ -4,6 +4,7 @@ from this_voice_thing.core.live_routes import (
     APP_SETUP,
     RouteProfileStore,
     paired_input_hint,
+    probably_headphones,
     probably_virtual_device,
 )
 
@@ -48,6 +49,11 @@ class RouteProfileStoreTests(unittest.TestCase):
         self.assertTrue(probably_virtual_device("CABLE Input (VB-Audio Virtual Cable)"))
         self.assertTrue(probably_virtual_device("VoiceMeeter Input"))
         self.assertFalse(probably_virtual_device("Realtek USB Headphones"))
+
+    def test_headphone_hint_is_conservative(self):
+        self.assertTrue(probably_headphones("USB Headphones"))
+        self.assertTrue(probably_headphones("Gaming Headset"))
+        self.assertFalse(probably_headphones("Desktop Speakers"))
 
     def test_app_profiles_exist_and_remain_external(self):
         store = RouteProfileStore({})

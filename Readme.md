@@ -155,6 +155,24 @@ You normally should **not**:
 
 Those are troubleshooting or development tasks, not normal use.
 
+### Live Voice route probe
+
+Before involving a TTS model, you can validate Windows/Qt audio routing with a known low-volume PCM tone:
+
+```bat
+.venv\Scripts\python.exe scripts\live_voice_route_probe.py
+```
+
+That lists playback and recording endpoints. To test a route:
+
+```bat
+.venv\Scripts\python.exe scripts\live_voice_route_probe.py --output "CABLE Input" --monitor "YOUR HEADPHONES"
+```
+
+The probe reports the negotiated sink format, bytes written, underruns, configured-to-start time, and a conservative paired-microphone hint when one can be identified. Use it to separate Windows/virtual-cable problems from TTS-model problems.
+
+See [Live Voice QA and performance runbook](docs/live-voice-qa.md) for the full acceptance sequence.
+
 ### Launchers
 
 - `run.bat`: **Windows users should start here.** It prepares or repairs the environment, then launches the app.
@@ -267,6 +285,7 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Bounded queue:** Live Voice caps outstanding work at 25 items and about 10 minutes of estimated speech so repeated pad presses or automation cannot grow memory without bound.
 - **Session privacy controls:** Live Speak history is session-only, capped, and can be cleared immediately. **Clear cache** removes all locally cached soundboard WAVs while keeping the pads themselves.
 - **Visible provenance:** the Live Voice header shows the selected voice origin and the current audio provenance/watermark policy. Cached pads preserve the provenance of the audio they were originally built from instead of merely saying “cached.”
+- **Copy diagnostics:** copies a privacy-conscious JSON snapshot with model/voice type, TTFA/RTF, route state, source/target sample rates, sink-start latency, bytes written, underruns and queue pressure. Spoken text is intentionally omitted.
 - **Monitoring feedback warning:** when an external route is armed and the monitor device does not look like headphones/headset/earbuds, Live Voice warns that a physical microphone may hear the monitoring output.
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
@@ -305,6 +324,7 @@ Architecture and implementation planning live in:
 - [Live Voice product specification](docs/live-voice-product-spec.md)
 - [Live Voice adversarial review](docs/live-voice-adversarial-review.md)
 - [Live Voice app routing guide](docs/live-voice-app-routing.md)
+- [Live Voice QA and performance runbook](docs/live-voice-qa.md)
 - [Live Voice app routing guide](docs/live-voice-app-routing.md)
 
 </details>

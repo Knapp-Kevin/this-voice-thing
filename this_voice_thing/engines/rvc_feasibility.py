@@ -223,6 +223,8 @@ def status() -> dict:
             ).strip()
         except Exception:
             python_version = "unavailable"
+    hubert = SOURCE_DIR / "assets" / "hubert_base" / "pytorch_model.bin"
+    rmvpe = SOURCE_DIR / "assets" / "rmvpe" / "rmvpe.pt"
     return {
         "engine": NAME,
         "upstream_repository": UPSTREAM_REPOSITORY,
@@ -230,6 +232,11 @@ def status() -> dict:
         "source_revision": revision,
         "source_matches_pin": revision == UPSTREAM_COMMIT,
         "upstream_license": UPSTREAM_LICENSE,
+        "asset_repository": ASSET_REPOSITORY,
+        "asset_revision": ASSET_REVISION,
+        "hubert_exists": hubert.is_file(),
+        "rmvpe_exists": rmvpe.is_file(),
+        "shared_assets_ready": bool(hubert.is_file() and rmvpe.is_file()),
         "python": str(python),
         "python_exists": python.exists(),
         "python_version": python_version,

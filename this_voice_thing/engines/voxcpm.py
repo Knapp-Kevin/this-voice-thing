@@ -10,6 +10,7 @@ One loaded model serves both modes, so the "voice cloning" and "voice design"
 entries switch instantly once either is loaded.
 """
 
+import base64
 import os
 import tempfile
 

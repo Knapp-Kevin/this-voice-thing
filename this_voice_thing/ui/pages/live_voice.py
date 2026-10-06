@@ -189,6 +189,23 @@ class LiveVoicePage:
         layout.addWidget(queue_card, 1)
 
         board_card, board_layout = self._make_card("Soundboard")
+        board_picker_row = QHBoxLayout()
+        board_picker_row.addWidget(QLabel("Board"))
+        self.soundboard_board_combo = QComboBox()
+        self.soundboard_board_combo.setMinimumWidth(220)
+        self.soundboard_board_combo.currentIndexChanged.connect(self.on_soundboard_board_changed)
+        board_picker_row.addWidget(self.soundboard_board_combo, 1)
+        new_board = QPushButton("New…")
+        new_board.clicked.connect(self.create_soundboard_board)
+        board_picker_row.addWidget(new_board)
+        rename_board = QPushButton("Rename…")
+        rename_board.clicked.connect(self.rename_soundboard_board)
+        board_picker_row.addWidget(rename_board)
+        delete_board = self._link(QPushButton("Delete board"))
+        delete_board.clicked.connect(self.delete_soundboard_board)
+        board_picker_row.addWidget(delete_board)
+        board_layout.addLayout(board_picker_row)
+
         self.soundboard_list = QListWidget()
         self.soundboard_list.setMinimumHeight(130)
         self.soundboard_list.itemDoubleClicked.connect(lambda _item: self.trigger_selected_soundboard_pad())
@@ -249,6 +266,7 @@ class LiveVoicePage:
             pass
         self.refresh_live_audio_devices()
         self.refresh_live_voice_summary()
+        self.refresh_soundboard_boards()
         self.refresh_soundboard()
         self.refresh_live_global_hotkeys()
         self.update_live_route_state()
@@ -896,6 +914,7 @@ class LiveVoicePage:
         if not accepted or not label.strip():
             return
         pad = self.soundboard_store.add_pad(self._current_soundboard_pad(label.strip(), text))
+        self.refresh_soundboard_boards()
         self.refresh_soundboard(select_id=pad.id)
         if self.model is None:
             self.soundboard_status_label.setText(
@@ -934,11 +953,96 @@ class LiveVoicePage:
         except Exception as exc:
             QMessageBox.warning(self, "Soundboard audio", f"Could not import the clip:\n\n{exc}")
             return
+        self.refresh_soundboard_boards()
         self.refresh_soundboard(select_id=pad.id)
         self.refresh_live_global_hotkeys()
         self.soundboard_status_label.setText(
             f"Imported {pad.label}. The soundboard now owns a local copy."
         )
+
+    def refresh_soundboard_boards(self, select_id=None):
+        if not hasattr(self, "soundboard_board_combo"):
+            return
+        selected = select_id or self.soundboard_store.active_board_id
+        self.soundboard_board_combo.blockSignals(True)
+        self.soundboard_board_combo.clear()
+        for board in self.soundboard_store.boards:
+            self.soundboard_board_combo.addItem(
+                f"{board.name} ({len(board.pads)})", board.id
+            )
+        index = self.soundboard_board_combo.findData(selected)
+        self.soundboard_board_combo.setCurrentIndex(max(0, index))
+        self.soundboard_board_combo.blockSignals(False)
+
+    def on_soundboard_board_changed(self, _index):
+        board_id = self.soundboard_board_combo.currentData()
+        if not board_id:
+            return
+        board = self.soundboard_store.select_board(str(board_id))
+        if board is None:
+            return
+        self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
+        self.soundboard_status_label.setText(
+            f"{board.name}: {len(board.pads)} pad(s)"
+        )
+
+    def create_soundboard_board(self):
+        name, accepted = QInputDialog.getText(
+            self, "New soundboard", "Board name:", text="New board"
+        )
+        if not accepted or not name.strip():
+            return
+        board = self.soundboard_store.create_board(name.strip())
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
+        self.soundboard_status_label.setText(f"Created {board.name}")
+
+    def rename_soundboard_board(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        name, accepted = QInputDialog.getText(
+            self, "Rename soundboard", "Board name:", text=board.name
+        )
+        if not accepted or not name.strip():
+            return
+        board = self.soundboard_store.rename_board(board.id, name.strip())
+        self.refresh_soundboard_boards(select_id=board.id)
+        self.soundboard_status_label.setText(f"Renamed board to {board.name}")
+
+    def delete_soundboard_board(self):
+        board = self.soundboard_store.active_board()
+        if board is None:
+            return
+        if len(self.soundboard_store.boards) <= 1:
+            QMessageBox.information(
+                self, "Delete soundboard", "The last soundboard cannot be deleted."
+            )
+            return
+        if self.live_voice_busy or self.live_voice_queue or self.live_audio_output.is_playing() \
+                or self.live_monitor_output.is_playing():
+            QMessageBox.information(
+                self,
+                "Delete soundboard",
+                "Stop Live Voice and clear the queue before deleting a board.",
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete soundboard",
+            f"Delete “{board.name}” and its {len(board.pads)} pad(s)?\n\n"
+            "Owned audio clips and unreferenced cached TTS files will also be deleted.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.soundboard_store.remove_board(board.id)
+        self.refresh_soundboard_boards()
+        self.refresh_soundboard()
+        self.refresh_live_global_hotkeys()
+        if removed is not None:
+            self.soundboard_status_label.setText(f"Deleted board {removed.name}")
 
     def selected_soundboard_pad(self):
         item = self.soundboard_list.currentItem()
@@ -1055,6 +1159,7 @@ class LiveVoicePage:
         if pad is None:
             return
         self.soundboard_store.remove_pad(pad.id)
+        self.refresh_soundboard_boards()
         self.refresh_soundboard()
         self.refresh_live_global_hotkeys()
         self.soundboard_status_label.setText(f"Deleted {pad.label}")
@@ -1091,11 +1196,11 @@ class LiveVoicePage:
             stop = str(self.app_settings.get("live_voice", {}).get("stop_hotkey", "") or "").strip()
             if stop:
                 assigned[stop] = "Global Stop All"
-        for board in self.soundboard_store.boards:
-            for pad in board.pads:
-                if pad.id == exclude_pad_id or not pad.hotkey:
-                    continue
-                assigned[pad.hotkey] = f"Soundboard: {pad.label}"
+        board = self.soundboard_store.active_board()
+        for pad in (board.pads if board is not None else []):
+            if pad.id == exclude_pad_id or not pad.hotkey:
+                continue
+            assigned[pad.hotkey] = f"Soundboard: {pad.label}"
         return assigned
 
     def _prompt_live_hotkey(self, title, current=""):
@@ -1171,13 +1276,13 @@ class LiveVoicePage:
             error = self.live_hotkeys.register("stop_all", stop)
             if error:
                 errors.append(f"{stop}: {error}")
-        for board in self.soundboard_store.boards:
-            for pad in board.pads:
-                if not pad.hotkey:
-                    continue
-                error = self.live_hotkeys.register(f"pad:{pad.id}", pad.hotkey)
-                if error:
-                    errors.append(f"{pad.label} ({pad.hotkey}): {error}")
+        board = self.soundboard_store.active_board()
+        for pad in (board.pads if board is not None else []):
+            if not pad.hotkey:
+                continue
+            error = self.live_hotkeys.register(f"pad:{pad.id}", pad.hotkey)
+            if error:
+                errors.append(f"{pad.label} ({pad.hotkey}): {error}")
 
         if not self.live_hotkeys.supported:
             self.live_hotkey_status_label.setText("Global hotkeys: Windows only")

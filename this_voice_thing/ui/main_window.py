@@ -419,6 +419,10 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
         if page == self.PAGE_LIVE_VOICE:
             self.refresh_live_voice_summary()
             self.refresh_live_audio_devices()
+            if not getattr(self, "live_board_defaults_applied", False) \
+                    and self.soundboard_defaults_can_apply():
+                self.apply_soundboard_board_defaults(self.soundboard_store.active_board())
+                self.live_board_defaults_applied = True
         if page == self.PAGE_STUDIO and not self.studio_busy:
             self._fill_studio_engines()  # models may have been added or installed meanwhile
         if page == self.PAGE_MODEL and getattr(self, "discover_results", None) is None \

@@ -3,6 +3,8 @@
 import json
 import os
 
+import soundfile as sf
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -802,13 +804,14 @@ class LiveVoicePage:
     def _live_outstanding_items(self):
         count = len(self.live_voice_queue)
         seconds = sum(
-            self._estimate_live_item_seconds(item.get("text", ""))
+            float(item.get("estimated_seconds") or self._estimate_live_item_seconds(item.get("text", "")))
             for item in self.live_voice_queue
         )
         if self.live_voice_current is not None:
             count += 1
-            seconds += self._estimate_live_item_seconds(
-                self.live_voice_current.get("text", "")
+            seconds += float(
+                self.live_voice_current.get("estimated_seconds")
+                or self._estimate_live_item_seconds(self.live_voice_current.get("text", ""))
             )
         return count, seconds
 
@@ -817,7 +820,10 @@ class LiveVoicePage:
         if not text:
             return False
         count, seconds = self._live_outstanding_items()
-        item_seconds = self._estimate_live_item_seconds(text)
+        item_seconds = float(
+            item.get("estimated_seconds")
+            or self._estimate_live_item_seconds(text)
+        )
         if count >= MAX_LIVE_QUEUE_ITEMS:
             self.live_status_label.setText(
                 f"Queue limit reached ({MAX_LIVE_QUEUE_ITEMS} outstanding items)."
@@ -1794,10 +1800,20 @@ class LiveVoicePage:
                     interactive,
                 )
                 return
+            try:
+                info = sf.info(path)
+                clip_seconds = (
+                    float(info.frames) / float(info.samplerate)
+                    if info.samplerate
+                    else self._estimate_live_item_seconds(pad.label)
+                )
+            except Exception:
+                clip_seconds = self._estimate_live_item_seconds(pad.label)
             item = {
                 "text": pad.label,
                 "label": pad.label,
                 "audio_path": path,
+                "estimated_seconds": clip_seconds,
                 "soundboard_pad_id": pad.id,
             }
             if self._enqueue_soundboard_item(item, pad, interactive):
@@ -2073,7 +2089,10 @@ class LiveVoicePage:
         queued_seconds = 0.0
         for index, item in enumerate(self.live_voice_queue, 1):
             text = str(item.get("text") or "").replace("\n", " ")
-            queued_seconds += self._estimate_live_item_seconds(text)
+            queued_seconds += float(
+                item.get("estimated_seconds")
+                or self._estimate_live_item_seconds(text)
+            )
             self.live_queue_list.addItem(f"{index}. {text[:120]}")
         if hasattr(self, "live_queue_pressure_label"):
             self.live_queue_pressure_label.setText(

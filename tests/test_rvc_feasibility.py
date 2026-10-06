@@ -51,7 +51,7 @@ soundfile>=0.13,<1
 
             self.assertEqual(command[0], str(rvc.venv_python()))
             self.assertIn(str(rvc.SOURCE_DIR / "infer" / "cli.py"), command)
-            self.assertIn("3.0", command)
+            self.assertIn("3", command)\n            self.assertIn("--overwrite", command)
 
             with self.assertRaises(ValueError):
                 rvc.build_offline_command(
@@ -61,19 +61,19 @@ soundfile>=0.13,<1
                     formant=2,
                 )
 
+    @mock.patch("this_voice_thing.engines.rvc_feasibility._source_revision")
     @mock.patch("this_voice_thing.engines.rvc_feasibility.subprocess.check_output")
     @mock.patch("this_voice_thing.engines.rvc_feasibility.Path.exists")
-    def test_status_requires_exact_revision(self, exists, check_output):
+    def test_status_requires_exact_revision(self, exists, check_output, source_revision):
         exists.return_value = True
-        check_output.side_effect = [
-            "different-revision\n",
-            "Python 3.12.9\n",
-        ]
+        source_revision.return_value = "different-revision"
+        check_output.return_value = "Python 3.12.9\n"
 
         result = rvc.status()
 
         self.assertFalse(result["source_matches_pin"])
         self.assertFalse(result["installed"])
+        self.assertEqual(result["python_version"], "Python 3.12.9")
 
 
 if __name__ == "__main__":

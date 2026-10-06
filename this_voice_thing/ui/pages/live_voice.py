@@ -936,7 +936,11 @@ class LiveVoicePage:
             if item.get("audio_path"):
                 session = AudioFileSpeechSession(item["audio_path"], item.get("label") or "Soundboard audio")
             elif item.get("cached_path"):
-                session = CachedSpeechSession(item["cached_path"], item.get("label") or "Soundboard")
+                session = CachedSpeechSession(
+                    item["cached_path"],
+                    item.get("label") or "Soundboard",
+                    provenance=item.get("cache_provenance") or "soundboard-cache-unknown",
+                )
             else:
                 session = self._make_live_session(item["text"])
                 if item.get("cache_key"):
@@ -983,7 +987,15 @@ class LiveVoicePage:
             else:
                 try:
                     self.live_monitor_output.configure(monitor, int(meta["sample_rate"]))
-                    self.live_monitor_status.setText(f"Monitoring: {monitor.description()}")
+                    if (
+                        self.active_live_route_profile().external
+                        and not live_routes.probably_headphones(monitor.description())
+                    ):
+                        self.live_monitor_status.setText(
+                            f"Monitoring: {monitor.description()} · feedback risk if a physical mic can hear it"
+                        )
+                    else:
+                        self.live_monitor_status.setText(f"Monitoring: {monitor.description()}")
                 except Exception as exc:
                     self.on_live_monitor_error(str(exc))
 
@@ -992,11 +1004,42 @@ class LiveVoicePage:
             {
                 "native": "Native streaming",
                 "segmented": "Segmented streaming",
-                "cached": "Cached",
+                "cached": "Cached playback",
                 "audio": "Audio clip",
                 "buffered": "Buffered fallback",
             }.get(mode, mode.replace("_", " ").title())
         )
+        provenance = str(meta.get("provenance") or "")
+        provenance_labels = {
+            "live-native-unwatermarked": "Provenance: native live · Perth watermark not applied",
+            "live-segmented-engine-watermark": "Provenance: segmented live · engine watermark applied",
+            "buffered-engine-default": "Provenance: buffered · engine/default policy",
+            "soundboard-cache-unknown": "Provenance: cached · original watermark state unknown",
+            "soundboard-audio-file": "Provenance: local audio clip · source file",
+        }
+        if mode == "cached":
+            cached_labels = {
+                "live-native-unwatermarked":
+                    "Provenance: cached from native live · Perth watermark not applied",
+                "live-segmented-engine-watermark":
+                    "Provenance: cached from segmented live · engine watermark applied",
+                "buffered-engine-default":
+                    "Provenance: cached from buffered render · engine/default policy",
+                "soundboard-cache-unknown":
+                    "Provenance: cached · original watermark state unknown",
+            }
+            self.live_provenance_label.setText(
+                cached_labels.get(
+                    provenance,
+                    f"Provenance: cached source · {provenance or 'unknown'}",
+                )
+            )
+        elif provenance in provenance_labels:
+            self.live_provenance_label.setText(provenance_labels[provenance])
+        elif provenance:
+            self.live_provenance_label.setText(f"Provenance: {provenance}")
+        else:
+            self.live_provenance_label.setText("Provenance: unavailable")
         verb = "Playing" if mode in ("cached", "audio") else "Generating"
         self.live_status_label.setText(
             f"{verb} · {mode} · {device.description()}"
@@ -1018,6 +1061,7 @@ class LiveVoicePage:
                 self.on_live_monitor_error(str(exc))
 
     def on_live_session_complete(self, metrics):
+        self.live_last_generation_metrics = dict(metrics)
         if not metrics.get("cancelled") and self.live_voice_current:
             if not self.live_voice_current.get("audio_path"):
                 self.live_voice_history.append({
@@ -1035,6 +1079,7 @@ class LiveVoicePage:
                     pad = self.soundboard_store.get_pad(pad_id)
                     if pad is not None:
                         pad.cache_key = cache_key
+                        pad.cache_provenance = str(metrics.get("provenance") or "")
                         self.soundboard_store.save()
                         self.soundboard_store.garbage_collect_cache()
                     self.refresh_soundboard()
@@ -1064,11 +1109,17 @@ class LiveVoicePage:
             self._live_start_next()
         else:
             self.live_audio_output.finish_input()
+            if self.live_monitor_output.route_description():
+                self.live_monitor_output.finish_input()
             self._set_live_generation_busy(False)
             self.live_current_label.setText("Finishing playback…")
 
     def live_stop_current(self):
-        if self.live_speech_thread is None and not self.live_audio_output.is_playing():
+        if (
+            self.live_speech_thread is None
+            and not self.live_audio_output.is_playing()
+            and not self.live_monitor_output.is_playing()
+        ):
             return
         self.live_audio_output.stop()
         self.live_monitor_output.stop()

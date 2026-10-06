@@ -155,6 +155,24 @@ You normally should **not**:
 
 Those are troubleshooting or development tasks, not normal use.
 
+### Live Voice route probe
+
+Before involving a TTS model, you can validate Windows/Qt audio routing with a known low-volume PCM tone:
+
+```bat
+.venv\Scripts\python.exe scripts\live_voice_route_probe.py
+```
+
+That lists playback and recording endpoints. To test a route:
+
+```bat
+.venv\Scripts\python.exe scripts\live_voice_route_probe.py --output "CABLE Input" --monitor "YOUR HEADPHONES"
+```
+
+The probe reports the negotiated sink format, bytes written, underruns, configured-to-start time, and a conservative paired-microphone hint when one can be identified. Use it to separate Windows/virtual-cable problems from TTS-model problems.
+
+See [Live Voice QA and performance runbook](docs/live-voice-qa.md) for the full acceptance sequence.
+
 ### Launchers
 
 - `run.bat`: **Windows users should start here.** It prepares or repairs the environment, then launches the app.
@@ -261,12 +279,23 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Stop current** silences the current utterance immediately and keeps later queued items.
 - **Stop all** discards audible buffered audio and clears the queue.
 - **Repeat last** resubmits the most recent completed line.
-- **Soundboard:** organize pads into persistent named boards, save the composer (or last spoken line) as a named TTS pad, or import a local audio clip. Create, rename, switch and delete boards directly in Live Voice; the active board is restored after restart. Each board can optionally remember a saved-library voice and route profile as defaults. Double-click or Trigger any pad to play it.
-- **Windows global hotkeys:** assign a modifier shortcut to any soundboard pad so it can fire while Discord, Zoom, a game or another app has focus. Pad shortcuts are scoped to the active board, so different boards can reuse the same layout. Live Voice also has an independent global **Stop All** shortcut that remains active across boards.
-- **Board defaults are preferences, not auto-transmit.** A board can remember the current saved voice and route. Defaults apply only while Live Voice is idle. Selecting a board that prefers Discord/Zoom/another external route selects that profile but leaves it **DISARMED**; the user must still arm it explicitly. Missing deleted voices/routes are cleared rather than substituted.
+- **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
+- **Multiple boards:** create, rename, switch and delete soundboard boards without mixing unrelated phrase sets together.
+- **Board defaults:** each board can prefer a saved voice, route, and default trigger policy. External routes remain disarmed when a board is selected, so a saved board cannot silently begin transmitting.
+- **Quick voices:** favorite saved voices for one-click switching from Live Voice without digging through the full voice library.
+- **Audio clip pads:** import local WAV/FLAC/OGG/MP3/AIFF files into the soundboard's owned `soundboard/audio/` storage. Clips use the same routing, monitoring, Stop, hotkey, and queue paths as generated speech and do not require a TTS model.
+- **Pad organization:** favorite pads, add tags, search by name/text/tag, filter to favorites, and move pads up/down without changing their saved identity.
+- **Explicit trigger behavior:** pads can inherit the board default or choose **Queue**, **Interrupt current**, or **Ignore if busy**. Every behavior still respects Live Voice's bounded queue and fail-closed route checks.
+- **Opt-in Windows global hotkeys:** assign modifier-based system-wide shortcuts to pads and Stop All. A visible master switch unregisters all global shortcuts instantly without deleting assignments; conflicts are reported rather than silently stealing keys.
+- **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, **Ctrl+Shift+Enter** repeats the last line, and **Ctrl+Shift+Up / Ctrl+Shift+Down** reorders the selected pad. These remain available independently of optional system-wide hotkeys.
+- **Bounded queue:** Live Voice caps outstanding work at 25 items and about 10 minutes of estimated speech so repeated pad presses or automation cannot grow memory without bound.
+- **Editable queue:** select a queued line to remove it or move it up/down before playback. **Delete** removes the selected queued item and **Alt+Up / Alt+Down** reorder it while Live Voice has focus.
+- The active model label exposes a plain-language readiness tooltip: getting ready, ready, or load one to speak.
+- **Session privacy controls:** Live Speak history is session-only, capped, and can be cleared immediately. **Clear cache** removes all locally cached soundboard WAVs while keeping the pads themselves.
+- **Visible provenance:** the Live Voice header shows the selected voice origin and the current audio provenance/watermark policy. Cached pads preserve the provenance of the audio they were originally built from instead of merely saying “cached.”
+- **Copy diagnostics:** copies a privacy-conscious JSON snapshot with model/voice type, TTFA/RTF, route state, source/target sample rates, sink-start latency, bytes written, underruns and queue pressure. Spoken text is intentionally omitted.
+- **Monitoring feedback warning:** when an external route is armed and the monitor device does not look like headphones/headset/earbuds, Live Voice warns that a physical microphone may hear the monitoring output.
 - Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
-- **Audio clip pads** copy supported local audio into `soundboard/audio/` so the board does not depend on the original Downloads/Desktop path. Clips stream through the same PCM route, monitoring, Stop and hotkey behavior as generated speech and do not require a TTS model. WAV, FLAC, OGG, MP3 and AIFF are offered by the picker; actual decoding follows the installed libsndfile/soundfile support.
-- Global shortcuts use the Windows `RegisterHotKey` API rather than a low-level keyboard hook. They require Ctrl, Alt or Shift plus one supported key, reject Windows-reserved F12/Win-key combinations, use no-repeat behavior, and report OS/application conflicts instead of silently stealing a shortcut.
 - Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
 - Deleting a pad garbage-collects cache files that are no longer referenced.
 - Choose a **Route**: **Local output**, **External / virtual microphone**, **Discord**, **Zoom**, **OBS**, or **Other app**. Each profile remembers its own primary output and optional monitor device.
@@ -303,6 +332,7 @@ Architecture and implementation planning live in:
 - [Live Voice product specification](docs/live-voice-product-spec.md)
 - [Live Voice adversarial review](docs/live-voice-adversarial-review.md)
 - [Live Voice app routing guide](docs/live-voice-app-routing.md)
+- [Live Voice QA and performance runbook](docs/live-voice-qa.md)
 - [Live Voice app routing guide](docs/live-voice-app-routing.md)
 
 </details>
@@ -586,7 +616,6 @@ this-voice-thing/
 │  │  ├─ dialogs/               recording, find/add models, voices and cast, pronunciation, Google Docs
 │  │  ├─ threads.py             model loading, generation, installs, speech and transcription threads
 │  │  ├─ live_audio.py          QAudioSink streaming playback, buffering and sample-rate conversion
-│  │  ├─ global_hotkeys.py      Windows RegisterHotKey manager for pads and Stop All
 │  │  ├─ api_bridge.py          hands local API requests to the window
 │  │  ├─ common.py              start-up setup, model config and shared constants
 │  │  ├─ widgets.py             small reusable widgets
@@ -597,9 +626,9 @@ this-voice-thing/
 │  │  ├─ worker.py              shared worker/environment support for the other engines
 │  │  └─ qwen.py, kokoro.py, voxcpm.py, omnivoice.py, vibevoice.py
 │  ├─ core/
-│  │  ├─ live_voice.py          shared live/cached/audio-file speech sessions and typed PCM AudioFrame
+│  │  ├─ live_voice.py          shared live/cached speech sessions and typed PCM AudioFrame
 │  │  ├─ live_routes.py         persistent route profiles and virtual-device hints
-│  │  ├─ soundboard.py          named boards, TTS/audio pads, hotkeys and content-addressed local WAV cache
+│  │  ├─ soundboard.py          persistent boards/pads and content-addressed local WAV cache
 │  │  ├─ model_registry.py      engines, capabilities, licenses, hardware needs, Hugging Face discovery
 │  │  ├─ documents.py           document loading, sectioning, conversation scripts
 │  │  ├─ audio_effects.py       joining, finishing, speed/pitch, export

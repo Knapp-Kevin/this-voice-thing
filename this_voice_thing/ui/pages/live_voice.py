@@ -783,6 +783,8 @@ class LiveVoicePage:
         if was_active:
             self.live_current_label.setText("Microphone stopped.")
             self.live_status_label.setText("Stopped")
+            if self.live_voice_queue and self.live_speech_thread is None:
+                self._live_start_next()
 
     def on_live_mic_frame(self, frame):
         if not self.live_mic_input.is_active():
@@ -1134,6 +1136,11 @@ class LiveVoicePage:
         return ""
 
     def live_test_route(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            QMessageBox.information(
+                self, "Test route", "Stop the live microphone before running the spoken route test."
+            )
+            return
         problem = self.live_route_problem()
         if problem:
             QMessageBox.information(self, "Test route", problem)
@@ -1184,6 +1191,11 @@ class LiveVoicePage:
         )
 
     def live_submit(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            QMessageBox.information(
+                self, "Live Voice", "Stop Mic Effects before sending typed speech."
+            )
+            return
         text = self.live_text_input.toPlainText().strip()
         if not text:
             return
@@ -2039,6 +2051,9 @@ class LiveVoicePage:
 
     def _enqueue_soundboard_item(self, item, pad, interactive=True):
         policy = self._soundboard_trigger_policy(pad)
+        mic_active = (
+            hasattr(self, "live_mic_input") and self.live_mic_input.is_active()
+        )
         busy = self._soundboard_is_busy()
         if policy == "ignore" and busy:
             self.soundboard_status_label.setText(
@@ -2059,8 +2074,9 @@ class LiveVoicePage:
             self.live_voice_queue.insert(0, queued)
             self._refresh_live_queue()
             self.live_stop_current()
+            mic_active = False
 
-        if self.live_speech_thread is None:
+        if self.live_speech_thread is None and not mic_active:
             self._live_start_next()
         return True
 
@@ -2503,7 +2519,7 @@ class LiveVoicePage:
     def on_live_audio_error(self, message):
         self.live_voice_last_error = str(message)
         if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
-            self.live_mic_input.stop()
+            self.stop_live_microphone()
         self.live_voice_queue.clear()
         self._refresh_live_queue()
         self.live_audio_output.stop()

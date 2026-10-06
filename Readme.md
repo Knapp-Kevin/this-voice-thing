@@ -231,7 +231,7 @@ Current additions include:
 - **Transcription.** Turn audio into text with Whisper, save it as text or subtitles, fill in a voice clip's transcript, or send it back to Generate.
 - **Pronunciation controls and subtitles.** Maintain a pronunciation dictionary and generate SRT or WebVTT from the known generation timeline.
 - **Audio finishing.** Adjust paragraph pauses, even out volume, trim silence, change speed or pitch, and export WAV, FLAC or MP3.
-- **Live Voice.** Type a line and send the selected voice directly to speakers, headphones or another Windows audio output without first rendering a file. Native and segmented engines begin playing while generation is still running; other engines use a buffered fallback.
+- **Live Voice and a cached TTS soundboard.** Type a line and send the selected voice directly to speakers, headphones or another Windows audio output without first rendering a file. Save useful phrases as persistent soundboard pads; after the first successful render, static pads play from a local WAV cache without waking the model or GPU.
 - **A local HTTP API.** Use the same engines and voice library from other software through OpenAI-compatible or native endpoints.
 - **A redesigned desktop interface.** Generate, Live Voice, Studio, Voices, Transcribe, Model, Advanced and Log pages with light and dark themes.
 
@@ -261,12 +261,16 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Stop current** silences the current utterance immediately and keeps later queued items.
 - **Stop all** discards audible buffered audio and clears the queue.
 - **Repeat last** resubmits the most recent completed line.
+- **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
+- Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
+- Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
+- Deleting a pad garbage-collects cache files that are no longer referenced.
 - Pick any audio output exposed by Windows/Qt, including speakers, headphones and compatible virtual audio-cable playback devices.
-- The page reports whether the selected model is using **Native streaming**, **Segmented streaming**, or a **Buffered fallback**.
+- The page reports whether the selected item is using **Native streaming**, **Segmented streaming**, **Buffered fallback**, or **Cached** playback.
 - VoxCPM2 uses native model streaming. Kokoro uses short segmented generation. Other compatible loaded engines can still speak here after completing the utterance.
 - Live playback has its own bounded audio buffer and converts the model's native sample rate when the selected device requires a different supported rate.
 
-This first implementation is **local-output first**. It can target a virtual audio device if one is already installed, but guided Discord/Zoom/OBS route profiles, monitoring, the persistent soundboard and global hotkeys are tracked as the next Live Voice slices. The app does not yet install a virtual microphone driver itself.
+This implementation is still **local-output first**. It can target a virtual audio device if one is already installed and now includes the persistent cached TTS soundboard, but guided Discord/Zoom/OBS route profiles, dual-device monitoring, audio-clip pads, multiple-board management and global hotkeys remain later Live Voice slices. The app does not yet install a virtual microphone driver itself.
 
 The desktop Live Voice path does **not** call the local HTTP API. Both surfaces consume the same underlying model streaming capabilities.
 
@@ -567,7 +571,8 @@ this-voice-thing/
 │  │  ├─ worker.py              shared worker/environment support for the other engines
 │  │  └─ qwen.py, kokoro.py, voxcpm.py, omnivoice.py, vibevoice.py
 │  ├─ core/
-│  │  ├─ live_voice.py          shared LiveSpeechSession and typed PCM AudioFrame
+│  │  ├─ live_voice.py          shared live/cached speech sessions and typed PCM AudioFrame
+│  │  ├─ soundboard.py          persistent boards/pads and content-addressed local WAV cache
 │  │  ├─ model_registry.py      engines, capabilities, licenses, hardware needs, Hugging Face discovery
 │  │  ├─ documents.py           document loading, sectioning, conversation scripts
 │  │  ├─ audio_effects.py       joining, finishing, speed/pitch, export

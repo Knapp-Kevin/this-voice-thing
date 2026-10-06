@@ -424,6 +424,13 @@ class LiveVoicePage:
         self.live_model_label.setText(
             loaded["label"] if loaded else "No model loaded"
         )
+        if getattr(self, "model_is_loading", False):
+            readiness = "Voice model: getting ready…"
+        elif self.model is not None:
+            readiness = "Voice model: ready"
+        else:
+            readiness = "Voice model: load one to speak"
+        self.live_model_label.setToolTip(readiness)
         if self.model is None:
             mode = "Unavailable"
         elif getattr(self.model, "native_streaming", False):
@@ -433,6 +440,73 @@ class LiveVoicePage:
         else:
             mode = "Buffered fallback"
         self.live_mode_label.setText(mode)
+        if hasattr(self, "live_voice_origin_label"):
+            origin = (voice.origin or voice.kind) if voice is not None else "default / current"
+            self.live_voice_origin_label.setText(f"Origin: {origin}")
+        if hasattr(self, "live_favorite_voice_combo"):
+            self.refresh_live_voice_favorites()
+
+    def refresh_live_voice_favorites(self):
+        if not hasattr(self, "live_favorite_voice_combo"):
+            return
+        settings = self.app_settings.setdefault("live_voice", {})
+        saved = list(settings.get("favorite_voice_ids", []) or [])
+        voices = {voice.id: voice for voice in self.voice_library.voices}
+        valid = [voice_id for voice_id in saved if voice_id in voices]
+        if valid != saved:
+            settings["favorite_voice_ids"] = valid
+            self.save_app_settings()
+        current = self.live_favorite_voice_combo.currentData()
+        self.live_favorite_voice_combo.blockSignals(True)
+        self.live_favorite_voice_combo.clear()
+        if not valid:
+            self.live_favorite_voice_combo.addItem("No favorite voices yet", None)
+        else:
+            for voice_id in valid:
+                voice = voices[voice_id]
+                self.live_favorite_voice_combo.addItem(voice.name, voice.id)
+        preferred = self.active_voice_id if self.active_voice_id in valid else current
+        index = self.live_favorite_voice_combo.findData(preferred)
+        if index >= 0:
+            self.live_favorite_voice_combo.setCurrentIndex(index)
+        self.live_favorite_voice_combo.blockSignals(False)
+
+    def favorite_current_live_voice(self):
+        voice = self.voice_library.get(self.active_voice_id) if self.active_voice_id else None
+        if voice is None:
+            QMessageBox.information(
+                self, "Quick voices", "Choose one of your saved voices before favoriting it."
+            )
+            return
+        settings = self.app_settings.setdefault("live_voice", {})
+        favorites = list(settings.get("favorite_voice_ids", []) or [])
+        if voice.id not in favorites:
+            favorites.append(voice.id)
+            settings["favorite_voice_ids"] = favorites
+            self.save_app_settings()
+        self.refresh_live_voice_favorites()
+        index = self.live_favorite_voice_combo.findData(voice.id)
+        if index >= 0:
+            self.live_favorite_voice_combo.setCurrentIndex(index)
+        self.live_status_label.setText(f"Quick voice saved: {voice.name}")
+
+    def remove_selected_favorite_voice(self):
+        voice_id = self.live_favorite_voice_combo.currentData()
+        if not voice_id:
+            return
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["favorite_voice_ids"] = [
+            item for item in list(settings.get("favorite_voice_ids", []) or [])
+            if item != voice_id
+        ]
+        self.save_app_settings()
+        self.refresh_live_voice_favorites()
+
+    def use_selected_favorite_voice(self):
+        voice_id = self.live_favorite_voice_combo.currentData()
+        voice = self.voice_library.get(voice_id) if voice_id else None
+        if voice is not None:
+            self.use_voice(voice)
 
     @staticmethod
     def _device_id_hex(device):

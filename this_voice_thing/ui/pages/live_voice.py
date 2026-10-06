@@ -243,6 +243,12 @@ class LiveVoicePage:
         delete_pad = self._link(QPushButton("Delete"))
         delete_pad.clicked.connect(self.delete_selected_soundboard_pad)
         board_actions.addWidget(delete_pad)
+        move_pad_up = self._link(QPushButton("Move up"))
+        move_pad_up.clicked.connect(lambda: self.move_selected_soundboard_pad(-1))
+        board_actions.addWidget(move_pad_up)
+        move_pad_down = self._link(QPushButton("Move down"))
+        move_pad_down.clicked.connect(lambda: self.move_selected_soundboard_pad(1))
+        board_actions.addWidget(move_pad_down)
         set_hotkey = QPushButton("Set hotkey…")
         set_hotkey.clicked.connect(self.set_selected_soundboard_hotkey)
         board_actions.addWidget(set_hotkey)
@@ -256,6 +262,12 @@ class LiveVoicePage:
         board_layout.addLayout(board_actions)
 
         hotkey_row = QHBoxLayout()
+        self.live_hotkeys_enabled_checkbox = QCheckBox("Enable global hotkeys")
+        self.live_hotkeys_enabled_checkbox.setChecked(
+            bool(self.app_settings.get("live_voice", {}).get("global_hotkeys_enabled", False))
+        )
+        self.live_hotkeys_enabled_checkbox.toggled.connect(self.on_live_global_hotkeys_toggled)
+        hotkey_row.addWidget(self.live_hotkeys_enabled_checkbox)
         hotkey_row.addWidget(QLabel("Global Stop All"))
         self.live_stop_hotkey_label = QLabel(
             self.app_settings.get("live_voice", {}).get("stop_hotkey", "") or "Not set"
@@ -275,8 +287,25 @@ class LiveVoicePage:
         board_layout.addLayout(hotkey_row)
         layout.addWidget(board_card, 1)
 
-        QShortcut(QKeySequence("Ctrl+Return"), page, activated=self.live_submit)
-        QShortcut(QKeySequence("Ctrl+Enter"), page, activated=self.live_submit)
+        self.live_voice_shortcuts = []
+        self._add_live_shortcut(page, "Ctrl+Return", self.live_submit)
+        self._add_live_shortcut(page, "Ctrl+Enter", self.live_submit)
+        self._add_live_shortcut(page, "Ctrl+.", self.live_stop_all)
+        self._add_live_shortcut(page, "Ctrl+Shift+Return", self.live_repeat_last)
+        self._add_live_shortcut(page, "Ctrl+Shift+Enter", self.live_repeat_last)
+        self._add_live_shortcut(page, "Ctrl+Shift+Up", lambda: self.move_selected_soundboard_pad(-1))
+        self._add_live_shortcut(page, "Ctrl+Shift+Down", lambda: self.move_selected_soundboard_pad(1))
+        for number in range(1, 10):
+            self._add_live_shortcut(
+                page,
+                f"Alt+{number}",
+                lambda index=number - 1: self.trigger_soundboard_pad_index(index),
+            )
+            self._add_live_shortcut(
+                page,
+                f"Ctrl+Alt+{number}",
+                lambda index=number - 1: self.select_soundboard_board_index(index),
+            )
 
         self.pages.addWidget(page)
         try:
@@ -291,6 +320,13 @@ class LiveVoicePage:
         self.refresh_soundboard_board_defaults()
         self.refresh_live_global_hotkeys()
         self.update_live_route_state()
+
+    def _add_live_shortcut(self, page, sequence, callback):
+        shortcut = QShortcut(QKeySequence(sequence), page)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(callback)
+        self.live_voice_shortcuts.append(shortcut)
+        return shortcut
 
     def refresh_live_voice_summary(self):
         if not hasattr(self, "live_voice_name_label"):
@@ -1192,6 +1228,34 @@ class LiveVoicePage:
         if removed is not None:
             self.soundboard_status_label.setText(f"Deleted board {removed.name}")
 
+    def select_soundboard_board_index(self, index):
+        if not (0 <= index < len(self.soundboard_store.boards)):
+            return
+        board = self.soundboard_store.select_board(self.soundboard_store.boards[index].id)
+        if board is None:
+            return
+        self.refresh_soundboard_boards()
+        self.refresh_soundboard()
+        self.refresh_soundboard_board_defaults()
+        self.apply_soundboard_board_defaults(board)
+        self.refresh_live_global_hotkeys()
+        self.soundboard_status_label.setText(f"Board: {board.name}")
+
+    def trigger_soundboard_pad_index(self, index):
+        board = self.soundboard_store.active_board()
+        if board is None or not (0 <= index < len(board.pads)):
+            return
+        self._queue_soundboard_pad(board.pads[index])
+
+    def move_selected_soundboard_pad(self, direction):
+        pad = self.selected_soundboard_pad()
+        if pad is None:
+            return
+        if self.soundboard_store.move_pad(pad.id, direction):
+            self.refresh_soundboard(select_id=pad.id)
+            self.refresh_live_global_hotkeys()
+            self.soundboard_status_label.setText(f"Moved {pad.label}.")
+
     def selected_soundboard_pad(self):
         item = self.soundboard_list.currentItem()
         if item is None:
@@ -1380,6 +1444,10 @@ class LiveVoicePage:
             return
         pad.hotkey = hotkey
         self.soundboard_store.save()
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["global_hotkeys_enabled"] = True
+        self.save_app_settings()
+        self.live_hotkeys_enabled_checkbox.setChecked(True)
         self.refresh_soundboard(select_id=pad.id)
         self.refresh_live_global_hotkeys()
 
@@ -1402,8 +1470,10 @@ class LiveVoicePage:
             QMessageBox.warning(self, "Global Stop All hotkey", f"{hotkey} is already assigned to {owner}.")
             return
         settings["stop_hotkey"] = hotkey
+        settings["global_hotkeys_enabled"] = True
         self.live_stop_hotkey_label.setText(hotkey)
         self.save_app_settings()
+        self.live_hotkeys_enabled_checkbox.setChecked(True)
         self.refresh_live_global_hotkeys()
 
     def clear_live_stop_hotkey(self):
@@ -1413,12 +1483,25 @@ class LiveVoicePage:
         self.save_app_settings()
         self.refresh_live_global_hotkeys()
 
+    def on_live_global_hotkeys_toggled(self, enabled):
+        settings = self.app_settings.setdefault("live_voice", {})
+        settings["global_hotkeys_enabled"] = bool(enabled)
+        self.save_app_settings()
+        self.refresh_live_global_hotkeys()
+
     def refresh_live_global_hotkeys(self):
         if not hasattr(self, "live_hotkeys"):
             return
         self.live_hotkeys.clear()
         errors = []
         settings = self.app_settings.setdefault("live_voice", {})
+        if not bool(settings.get("global_hotkeys_enabled", False)):
+            if hasattr(self, "live_hotkey_status_label"):
+                self.live_hotkey_status_label.setText("Global hotkeys: disabled")
+                self.live_hotkey_status_label.setToolTip(
+                    "Assignments are preserved but no system-wide shortcuts are registered."
+                )
+            return
         stop = str(settings.get("stop_hotkey", "") or "").strip()
         if stop:
             error = self.live_hotkeys.register("stop_all", stop)

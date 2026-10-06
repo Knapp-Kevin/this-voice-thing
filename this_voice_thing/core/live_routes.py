@@ -112,6 +112,11 @@ def probably_virtual_device(description):
     return any(token in lowered for token in VIRTUAL_DEVICE_HINTS)
 
 
+def probably_headphones(description):
+    lowered = str(description or "").lower()
+    return any(token in lowered for token in ("headphone", "headset", "earbud", "earphones"))
+
+
 def paired_input_hint(output_description, input_descriptions):
     """Best-effort recording-endpoint hint for a selected virtual playback device.
 

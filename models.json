@@ -69,7 +69,12 @@
       "backend": "kokoro",
       "language_id": "en",
       "license": "apache-2.0",
-      "download_bytes": 355479286
+      "download_bytes": 355479286,
+      "live_audio": {
+        "mode": "segmented",
+        "response_format": "pcm",
+        "sample_rate": 24000
+      }
     },
     {
       "repo_id": "openbmb/VoxCPM2",

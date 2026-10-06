@@ -1,11 +1,14 @@
 """Live Voice page: type text and send generated PCM directly to an audio device."""
 
+import os
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -16,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from this_voice_thing.core import live_routes, soundboard, voice_library
-from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
+from this_voice_thing.core.live_voice import AudioFileSpeechSession, CachedSpeechSession, LiveSpeechSession
 from this_voice_thing.engines import vibevoice as vibevoice_engine
 from this_voice_thing.ui.global_hotkeys import GlobalHotkeyManager, HotkeyError, normalize_hotkey
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
@@ -194,6 +197,9 @@ class LiveVoicePage:
         save_pad = self._accent(QPushButton("Save text as pad"))
         save_pad.clicked.connect(self.save_soundboard_pad)
         board_actions.addWidget(save_pad)
+        add_audio_pad = QPushButton("Add audio clip…")
+        add_audio_pad.clicked.connect(self.add_soundboard_audio_pad)
+        board_actions.addWidget(add_audio_pad)
         trigger_pad = QPushButton("Trigger")
         trigger_pad.clicked.connect(self.trigger_selected_soundboard_pad)
         board_actions.addWidget(trigger_pad)
@@ -659,7 +665,9 @@ class LiveVoicePage:
         self.live_voice_last_error = ""
         self._refresh_live_queue()
         try:
-            if item.get("cached_path"):
+            if item.get("audio_path"):
+                session = AudioFileSpeechSession(item["audio_path"], item.get("label") or "Soundboard audio")
+            elif item.get("cached_path"):
                 session = CachedSpeechSession(item["cached_path"], item.get("label") or "Soundboard")
             else:
                 session = self._make_live_session(item["text"])
@@ -713,12 +721,17 @@ class LiveVoicePage:
 
         mode = str(meta.get("mode") or "buffered")
         self.live_mode_label.setText(
-            {"native": "Native streaming", "segmented": "Segmented streaming"}.get(
-                mode, "Buffered fallback"
-            )
+            {
+                "native": "Native streaming",
+                "segmented": "Segmented streaming",
+                "cached": "Cached",
+                "audio": "Audio clip",
+                "buffered": "Buffered fallback",
+            }.get(mode, mode.replace("_", " ").title())
         )
+        verb = "Playing" if mode in ("cached", "audio") else "Generating"
         self.live_status_label.setText(
-            f"Generating · {mode} · {device.description()}"
+            f"{verb} · {mode} · {device.description()}"
         )
 
     def on_live_frame(self, frame):
@@ -738,11 +751,12 @@ class LiveVoicePage:
 
     def on_live_session_complete(self, metrics):
         if not metrics.get("cancelled") and self.live_voice_current:
-            self.live_voice_history.append({
-                "text": self.live_voice_current["text"],
-                "metrics": dict(metrics),
-            })
-            self.live_voice_history = self.live_voice_history[-50:]
+            if not self.live_voice_current.get("audio_path"):
+                self.live_voice_history.append({
+                    "text": self.live_voice_current["text"],
+                    "metrics": dict(metrics),
+                })
+                self.live_voice_history = self.live_voice_history[-50:]
             cache_key = self.live_voice_current.get("cache_key")
             pcm = self.live_voice_current.get("_cache_pcm")
             sample_rate = self.live_voice_current.get("_cache_sample_rate")
@@ -891,6 +905,41 @@ class LiveVoicePage:
         self.soundboard_status_label.setText("Pad saved. Building its local cache…")
         self._queue_soundboard_pad(pad, force_generate=True)
 
+    def add_soundboard_audio_pad(self):
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Add soundboard audio clip",
+            self.script_dir,
+            "Audio files (*.wav *.flac *.ogg *.mp3 *.aiff *.aif);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            AudioFileSpeechSession(path)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Soundboard audio",
+                f"This audio file could not be opened by the installed audio decoder:\n\n{exc}",
+            )
+            return
+        default = os.path.splitext(os.path.basename(path))[0] or "Audio clip"
+        label, accepted = QInputDialog.getText(
+            self, "Add soundboard audio clip", "Pad label:", text=default
+        )
+        if not accepted or not label.strip():
+            return
+        try:
+            pad = self.soundboard_store.import_audio_pad(path, label.strip())
+        except Exception as exc:
+            QMessageBox.warning(self, "Soundboard audio", f"Could not import the clip:\n\n{exc}")
+            return
+        self.refresh_soundboard(select_id=pad.id)
+        self.refresh_live_global_hotkeys()
+        self.soundboard_status_label.setText(
+            f"Imported {pad.label}. The soundboard now owns a local copy."
+        )
+
     def selected_soundboard_pad(self):
         item = self.soundboard_list.currentItem()
         if item is None:
@@ -935,6 +984,28 @@ class LiveVoicePage:
         if route_problem:
             self._soundboard_problem("Soundboard route", route_problem, interactive)
             return
+        if pad.kind == "audio":
+            path = self.soundboard_store.audio_path(pad)
+            if not path or not os.path.isfile(path):
+                self._soundboard_problem(
+                    "Soundboard audio",
+                    f"{pad.label}'s local audio file is missing. Delete and re-import the pad.",
+                    interactive,
+                )
+                return
+            self.live_voice_queue.append({
+                "text": pad.label,
+                "label": pad.label,
+                "audio_path": path,
+                "soundboard_pad_id": pad.id,
+            })
+            self.soundboard_status_label.setText(f"{pad.label}: audio clip")
+            self._refresh_live_queue()
+            self.live_voice_stop_all_requested = False
+            if self.live_speech_thread is None:
+                self._live_start_next()
+            return
+
         expected = self._soundboard_cache_key(pad)
         cached = (
             not force_generate
@@ -996,15 +1067,21 @@ class LiveVoicePage:
         if board is None:
             return
         for pad in board.pads:
-            expected = self._soundboard_cache_key(pad)
-            cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
-            suffix = " · cached" if cached else " · rebuild needed"
+            if pad.kind == "audio":
+                audio_path = self.soundboard_store.audio_path(pad)
+                suffix = " · audio clip" if audio_path and os.path.isfile(audio_path) else " · audio missing"
+                tooltip = audio_path or "Audio file missing"
+            else:
+                expected = self._soundboard_cache_key(pad)
+                cached = pad.cache_key == expected and self.soundboard_store.has_cache(expected)
+                suffix = " · cached" if cached else " · rebuild needed"
+                tooltip = pad.text
             if pad.hotkey:
                 suffix += f" · {pad.hotkey}"
             self.soundboard_list.addItem(f"{pad.label}{suffix}")
             item = self.soundboard_list.item(self.soundboard_list.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, pad.id)
-            item.setToolTip(pad.text)
+            item.setToolTip(tooltip)
             if select_id == pad.id:
                 self.soundboard_list.setCurrentItem(item)
 

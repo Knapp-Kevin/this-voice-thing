@@ -163,6 +163,57 @@ class SoundboardStoreTests(unittest.TestCase):
 
         self.assertTrue(os.path.exists(path))
 
+    def test_pad_metadata_and_board_trigger_policy_persist(self):
+        board = self.store.active_board()
+        board.default_interrupt_policy = "ignore"
+        pad = self.store.add_pad(Pad(
+            label="Favorite",
+            text="Hello.",
+            favorite=True,
+            tags=["meeting", "useful"],
+            interrupt_policy="interrupt",
+        ))
+        self.store.save()
+
+        reloaded = SoundboardStore(self.temp.name)
+        restored_board = reloaded.active_board()
+        restored_pad = reloaded.get_pad(pad.id)
+
+        self.assertEqual(restored_board.default_interrupt_policy, "ignore")
+        self.assertTrue(restored_pad.favorite)
+        self.assertEqual(restored_pad.tags, ["meeting", "useful"])
+        self.assertEqual(restored_pad.interrupt_policy, "interrupt")
+
+    def test_move_pad_persists_order(self):
+        first = self.store.add_pad(Pad(label="First", text="One"))
+        second = self.store.add_pad(Pad(label="Second", text="Two"))
+
+        self.assertTrue(self.store.move_pad(second.id, -1))
+
+        reloaded = SoundboardStore(self.temp.name)
+        self.assertEqual(
+            [pad.id for pad in reloaded.active_board().pads],
+            [second.id, first.id],
+        )
+        self.assertFalse(reloaded.move_pad(second.id, -1))
+
+    def test_clear_cache_preserves_pads_audio_and_resets_provenance(self):
+        pad = self.store.add_pad(Pad(label="Test", text="Hello."))
+        key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})
+        path = self.store.write_pcm_cache(key, b"\x00\x00" * 10, 16000)
+        pad.cache_key = key
+        pad.cache_provenance = "live-native-unwatermarked"
+        self.store.save()
+
+        removed = self.store.clear_cache()
+
+        self.assertEqual(removed, 1)
+        self.assertFalse(os.path.exists(path))
+        restored = self.store.get_pad(pad.id)
+        self.assertEqual(restored.cache_key, "")
+        self.assertEqual(restored.cache_provenance, "")
+        self.assertEqual(len(self.store.active_board().pads), 1)
+
     def test_removing_last_reference_garbage_collects_cache(self):
         pad = self.store.add_pad(Pad(label="Test", text="Hello."))
         key = self.store.cache_digest(pad, {"voice_fingerprint": "voice"})

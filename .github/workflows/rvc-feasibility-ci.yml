@@ -1,1 +1,51 @@
-name: RVC Feasibility CI\n\non:\n  pull_request:\n    paths:\n      - "this_voice_thing/engines/rvc_feasibility.py"\n      - "scripts/rvc_feasibility.py"\n      - "tests/test_rvc_feasibility.py"\n      - ".github/workflows/rvc-feasibility-ci.yml"\n  push:\n    branches:\n      - main\n    paths:\n      - "this_voice_thing/engines/rvc_feasibility.py"\n      - "scripts/rvc_feasibility.py"\n      - "tests/test_rvc_feasibility.py"\n      - ".github/workflows/rvc-feasibility-ci.yml"\n\npermissions:\n  contents: read\n\nconcurrency:\n  group: rvc-feasibility-${{ github.event.pull_request.number || github.ref }}\n  cancel-in-progress: true\n\njobs:\n  harness:\n    name: RVC harness (${{ matrix.os }})\n    runs-on: ${{ matrix.os }}\n    timeout-minutes: 5\n    strategy:\n      fail-fast: false\n      matrix:\n        os:\n          - ubuntu-latest\n          - windows-latest\n    steps:\n      - uses: actions/checkout@v5\n      - uses: actions/setup-python@v6\n        with:\n          python-version: "3.11"\n      - name: Compile harness\n        run: >-\n          python -m py_compile\n          this_voice_thing/engines/rvc_feasibility.py\n          scripts/rvc_feasibility.py\n          tests/test_rvc_feasibility.py\n      - name: Run harness tests\n        run: python -m unittest -v tests.test_rvc_feasibility\n      - name: Show uninstalled status\n        run: python scripts/rvc_feasibility.py status\n
+name: RVC Feasibility CI
+
+on:
+  pull_request:
+    paths:
+      - "this_voice_thing/engines/rvc_feasibility.py"
+      - "scripts/rvc_feasibility.py"
+      - "tests/test_rvc_feasibility.py"
+      - ".github/workflows/rvc-feasibility-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "this_voice_thing/engines/rvc_feasibility.py"
+      - "scripts/rvc_feasibility.py"
+      - "tests/test_rvc_feasibility.py"
+      - ".github/workflows/rvc-feasibility-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rvc-feasibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  harness:
+    name: RVC harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Compile harness
+        run: >-
+          python -m py_compile
+          this_voice_thing/engines/rvc_feasibility.py
+          scripts/rvc_feasibility.py
+          tests/test_rvc_feasibility.py
+      - name: Run harness tests
+        run: python -m unittest -v tests.test_rvc_feasibility
+      - name: Show uninstalled status
+        run: python scripts/rvc_feasibility.py status

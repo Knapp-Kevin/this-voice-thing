@@ -1,8 +1,11 @@
+import os
+import tempfile
 import unittest
+import wave
 
 import numpy as np
 
-from this_voice_thing.core.live_voice import LiveSpeechSession
+from this_voice_thing.core.live_voice import CachedSpeechSession, LiveSpeechSession
 
 
 class NativeModel:
@@ -35,6 +38,46 @@ class BufferedModel:
 class Pronunciations:
     def apply_section(self, text):
         return text.replace("SQL", "sequel"), 1
+
+
+class CachedSpeechSessionTests(unittest.TestCase):
+    def test_cached_wav_uses_same_pcm_frame_interface(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        path = handle.name
+        handle.close()
+        pcm = b"\x01\x00\x02\x00" * 16
+        try:
+            with wave.open(path, "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(24000)
+                output.writeframes(pcm)
+
+            session = CachedSpeechSession(path)
+            frames = list(session.frames())
+
+            self.assertEqual(session.delivery_mode, "cached")
+            self.assertEqual(session.sample_rate, 24000)
+            self.assertEqual(b"".join(frame.pcm for frame in frames), pcm)
+            self.assertEqual(session.metrics()["provenance"], "soundboard-cache")
+        finally:
+            os.remove(path)
+
+    def test_cached_wav_rejects_stereo(self):
+        handle = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        path = handle.name
+        handle.close()
+        try:
+            with wave.open(path, "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(48000)
+                output.writeframes(b"\x00\x00\x00\x00")
+
+            with self.assertRaisesRegex(ValueError, "mono 16-bit PCM"):
+                CachedSpeechSession(path)
+        finally:
+            os.remove(path)
 
 
 class LiveSpeechSessionTests(unittest.TestCase):

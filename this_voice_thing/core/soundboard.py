@@ -38,6 +38,7 @@ class Pad:
     cache_key: str = ""
     audio_file: str = ""
     hotkey: str = ""
+    favorite: bool = False
     tags: list = field(default_factory=list)
     created: str = field(default_factory=lambda: datetime.datetime.now().isoformat(timespec="seconds"))
 
@@ -49,6 +50,7 @@ class Board:
     pads: list = field(default_factory=list)
     default_voice_id: str = ""
     route_profile: str = ""
+    default_interrupt_policy: str = "queue"
 
 
 def voice_fingerprint(voice, clip_path="", transcript=""):

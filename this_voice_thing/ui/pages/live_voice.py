@@ -22,6 +22,11 @@ from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
 from this_voice_thing.ui import theme as ui_theme
 
 
+MAX_LIVE_QUEUE_ITEMS = 25
+MAX_LIVE_QUEUE_SECONDS = 600.0
+APPROX_SPEECH_CHARS_PER_SECOND = 13.0
+
+
 class LiveVoicePage:
     """Live Speak UI mixed into ChatterboxApp."""
 
@@ -77,6 +82,12 @@ class LiveVoicePage:
         self.live_mode_label = QLabel("Buffered")
         self.live_mode_label.setObjectName("Muted")
         voice_row.addWidget(self.live_mode_label)
+        self.live_voice_origin_label = QLabel("Origin: default")
+        self.live_voice_origin_label.setObjectName("Muted")
+        voice_row.addWidget(self.live_voice_origin_label)
+        self.live_provenance_label = QLabel("Provenance: idle")
+        self.live_provenance_label.setObjectName("Muted")
+        voice_row.addWidget(self.live_provenance_label)
         route_layout.addLayout(voice_row)
 
         profile_row = QHBoxLayout()
@@ -179,7 +190,13 @@ class LiveVoicePage:
         clear = self._link(QPushButton("Clear queued"))
         clear.clicked.connect(self.live_clear_queue)
         queue_actions.addWidget(clear)
+        clear_history = self._link(QPushButton("Clear history"))
+        clear_history.clicked.connect(self.live_clear_history)
+        queue_actions.addWidget(clear_history)
         queue_actions.addStretch(1)
+        self.live_queue_pressure_label = QLabel("0 queued")
+        self.live_queue_pressure_label.setObjectName("Muted")
+        queue_actions.addWidget(self.live_queue_pressure_label)
         queue_layout.addLayout(queue_actions)
         layout.addWidget(queue_card, 1)
 
@@ -214,6 +231,9 @@ class LiveVoicePage:
         delete_pad = self._link(QPushButton("Delete"))
         delete_pad.clicked.connect(self.delete_selected_soundboard_pad)
         board_actions.addWidget(delete_pad)
+        clear_cache = self._link(QPushButton("Clear cache"))
+        clear_cache.clicked.connect(self.clear_soundboard_cache)
+        board_actions.addWidget(clear_cache)
         board_actions.addStretch(1)
         self.soundboard_status_label = QLabel("Static TTS pads cache locally after their first successful generation.")
         self.soundboard_status_label.setObjectName("Muted")
@@ -280,6 +300,11 @@ class LiveVoicePage:
         else:
             mode = "Buffered fallback"
         self.live_mode_label.setText(mode)
+        if voice is None:
+            origin = "default / current"
+        else:
+            origin = voice.origin or voice.kind
+        self.live_voice_origin_label.setText(f"Origin: {origin}")
 
     @staticmethod
     def _device_id_hex(device):
@@ -564,6 +589,40 @@ class LiveVoicePage:
             self.live_monitor_checkbox.isChecked() and not self.live_voice_busy
         )
 
+    @staticmethod
+    def _estimate_live_item_seconds(text):
+        text = str(text or "").strip()
+        return max(0.5, len(text) / APPROX_SPEECH_CHARS_PER_SECOND) if text else 0.0
+
+    def _live_outstanding_items(self):
+        count = len(self.live_voice_queue)
+        seconds = sum(self._estimate_live_item_seconds(item.get("text", "")) for item in self.live_voice_queue)
+        if self.live_voice_current is not None:
+            count += 1
+            seconds += self._estimate_live_item_seconds(self.live_voice_current.get("text", ""))
+        return count, seconds
+
+    def _enqueue_live_item(self, item):
+        text = str(item.get("text") or "").strip()
+        if not text:
+            return False
+        count, seconds = self._live_outstanding_items()
+        item_seconds = self._estimate_live_item_seconds(text)
+        if count >= MAX_LIVE_QUEUE_ITEMS:
+            self.live_status_label.setText(
+                f"Queue limit reached ({MAX_LIVE_QUEUE_ITEMS} outstanding items)."
+            )
+            return False
+        if seconds + item_seconds > MAX_LIVE_QUEUE_SECONDS:
+            self.live_status_label.setText(
+                "Queue limit reached (about 10 minutes of outstanding speech)."
+            )
+            return False
+        self.live_voice_queue.append(item)
+        self._refresh_live_queue()
+        self.live_stop_all_requested = False
+        return True
+
     def live_route_problem(self):
         profile = self.active_live_route_profile()
         if self.current_live_audio_device() is None:
@@ -590,11 +649,9 @@ class LiveVoicePage:
                 self, "Test route", "The model is busy. Try the route test when generation is idle."
             )
             return
-        self.live_voice_queue.append({"text": "This Voice Thing route test."})
-        self._refresh_live_queue()
-        self.live_stop_all_requested = False
-        if self.live_speech_thread is None:
-            self._live_start_next()
+        if self._enqueue_live_item({"text": "This Voice Thing route test."}):
+            if self.live_speech_thread is None:
+                self._live_start_next()
 
     def _live_generate_kwargs(self):
         return {
@@ -646,10 +703,9 @@ class LiveVoicePage:
             QMessageBox.information(self, "Live Voice route", route_problem)
             return
 
-        self.live_voice_queue.append({"text": text})
+        if not self._enqueue_live_item({"text": text}):
+            return
         self.live_text_input.clear()
-        self._refresh_live_queue()
-        self.live_stop_all_requested = False
         if self.live_speech_thread is None:
             self._live_start_next()
 
@@ -671,7 +727,11 @@ class LiveVoicePage:
         self._refresh_live_queue()
         try:
             if item.get("cached_path"):
-                session = CachedSpeechSession(item["cached_path"], item.get("label") or "Soundboard")
+                session = CachedSpeechSession(
+                    item["cached_path"],
+                    item.get("label") or "Soundboard",
+                    provenance=item.get("cache_provenance") or "soundboard-cache-unknown",
+                )
             else:
                 session = self._make_live_session(item["text"])
                 if item.get("cache_key"):
@@ -718,16 +778,53 @@ class LiveVoicePage:
             else:
                 try:
                     self.live_monitor_output.configure(monitor, int(meta["sample_rate"]))
-                    self.live_monitor_status.setText(f"Monitoring: {monitor.description()}")
+                    if (
+                        self.active_live_route_profile().external
+                        and not live_routes.probably_headphones(monitor.description())
+                    ):
+                        self.live_monitor_status.setText(
+                            f"Monitoring: {monitor.description()} · feedback risk if a physical mic can hear it"
+                        )
+                    else:
+                        self.live_monitor_status.setText(f"Monitoring: {monitor.description()}")
                 except Exception as exc:
                     self.on_live_monitor_error(str(exc))
 
         mode = str(meta.get("mode") or "buffered")
         self.live_mode_label.setText(
-            {"native": "Native streaming", "segmented": "Segmented streaming"}.get(
-                mode, "Buffered fallback"
-            )
+            {
+                "native": "Native streaming",
+                "segmented": "Segmented streaming",
+                "cached": "Cached playback",
+            }.get(mode, "Buffered fallback")
         )
+        provenance = str(meta.get("provenance") or "")
+        provenance_labels = {
+            "live-native-unwatermarked": "Provenance: native live · Perth watermark not applied",
+            "live-segmented-engine-watermark": "Provenance: segmented live · engine watermark applied",
+            "buffered-engine-default": "Provenance: buffered · engine/default policy",
+            "soundboard-cache-unknown": "Provenance: cached · original watermark state unknown",
+        }
+        if mode == "cached":
+            cached_labels = {
+                "live-native-unwatermarked":
+                    "Provenance: cached from native live · Perth watermark not applied",
+                "live-segmented-engine-watermark":
+                    "Provenance: cached from segmented live · engine watermark applied",
+                "buffered-engine-default":
+                    "Provenance: cached from buffered render · engine/default policy",
+                "soundboard-cache-unknown":
+                    "Provenance: cached · original watermark state unknown",
+            }
+            self.live_provenance_label.setText(
+                cached_labels.get(provenance, f"Provenance: cached source · {provenance or 'unknown'}")
+            )
+        elif provenance in provenance_labels:
+            self.live_provenance_label.setText(provenance_labels[provenance])
+        elif provenance:
+            self.live_provenance_label.setText(f"Provenance: {provenance}")
+        else:
+            self.live_provenance_label.setText("Provenance: unavailable")
         self.live_status_label.setText(
             f"Generating · {mode} · {device.description()}"
         )
@@ -764,6 +861,7 @@ class LiveVoicePage:
                     pad = self.soundboard_store.get_pad(pad_id)
                     if pad is not None:
                         pad.cache_key = cache_key
+                        pad.cache_provenance = str(metrics.get("provenance") or "")
                         self.soundboard_store.save()
                         self.soundboard_store.garbage_collect_cache()
                     self.refresh_soundboard()
@@ -793,11 +891,17 @@ class LiveVoicePage:
             self._live_start_next()
         else:
             self.live_audio_output.finish_input()
+            if self.live_monitor_output.route_description():
+                self.live_monitor_output.finish_input()
             self._set_live_generation_busy(False)
             self.live_current_label.setText("Finishing playback…")
 
     def live_stop_current(self):
-        if self.live_speech_thread is None and not self.live_audio_output.is_playing():
+        if (
+            self.live_speech_thread is None
+            and not self.live_audio_output.is_playing()
+            and not self.live_monitor_output.is_playing()
+        ):
             return
         self.live_audio_output.stop()
         self.live_monitor_output.stop()
@@ -826,6 +930,13 @@ class LiveVoicePage:
     def live_clear_queue(self):
         self.live_voice_queue.clear()
         self._refresh_live_queue()
+
+    def live_clear_history(self):
+        count = len(self.live_voice_history)
+        self.live_voice_history.clear()
+        self.live_status_label.setText(
+            f"Cleared {count} session-history item(s)." if count else "Session history is already empty."
+        )
 
     def live_repeat_last(self):
         if not self.live_voice_history:
@@ -880,6 +991,19 @@ class LiveVoicePage:
             min_p=float(self.min_p),
             top_p=float(self.top_p),
         )
+
+    def clear_soundboard_cache(self):
+        answer = QMessageBox.question(
+            self,
+            "Clear soundboard cache",
+            "Delete all cached soundboard audio? Pads and boards will remain, but static TTS pads "
+            "will need to be generated again before they can play without the model.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.soundboard_store.clear_cache()
+        self.refresh_soundboard()
+        self.soundboard_status_label.setText(f"Cleared {removed} cached audio file(s).")
 
     def refresh_soundboard_boards(self, select_id=None):
         if not hasattr(self, "soundboard_board_combo"):
@@ -1023,12 +1147,16 @@ class LiveVoicePage:
             and self.soundboard_store.has_cache(expected)
         )
         if cached:
-            self.live_voice_queue.append({
+            item = {
                 "text": pad.text,
                 "label": pad.label,
                 "cached_path": self.soundboard_store.cache_path(expected),
+                "cache_provenance": pad.cache_provenance,
                 "soundboard_pad_id": pad.id,
-            })
+            }
+            if not self._enqueue_live_item(item):
+                self.soundboard_status_label.setText("Soundboard queue limit reached.")
+                return
             self.soundboard_status_label.setText(f"{pad.label}: cached")
         else:
             if self.live_speech_thread is None and (
@@ -1048,15 +1176,16 @@ class LiveVoicePage:
                     "Select that voice/model again, then trigger the pad to rebuild it.",
                 )
                 return
-            self.live_voice_queue.append({
+            item = {
                 "text": pad.text,
                 "label": pad.label,
                 "soundboard_pad_id": pad.id,
                 "cache_key": expected,
-            })
+            }
+            if not self._enqueue_live_item(item):
+                self.soundboard_status_label.setText("Soundboard queue limit reached.")
+                return
             self.soundboard_status_label.setText(f"{pad.label}: generating and caching…")
-        self._refresh_live_queue()
-        self.live_voice_stop_all_requested = False
         if self.live_speech_thread is None:
             self._live_start_next()
 
@@ -1093,9 +1222,15 @@ class LiveVoicePage:
 
     def _refresh_live_queue(self):
         self.live_queue_list.clear()
+        queued_seconds = 0.0
         for index, item in enumerate(self.live_voice_queue, 1):
             text = item["text"].replace("\n", " ")
+            queued_seconds += self._estimate_live_item_seconds(text)
             self.live_queue_list.addItem(f"{index}. {text[:120]}")
+        if hasattr(self, "live_queue_pressure_label"):
+            self.live_queue_pressure_label.setText(
+                f"{len(self.live_voice_queue)} queued · ~{queued_seconds:.0f}s"
+            )
 
     def _set_live_generation_busy(self, busy):
         self.live_voice_busy = bool(busy)

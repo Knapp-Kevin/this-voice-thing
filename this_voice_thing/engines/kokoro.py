@@ -13,6 +13,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
+from this_voice_thing.core import audio_effects, documents
 from this_voice_thing.engines import worker as engine_worker
 
 NAME = "kokoro"
@@ -26,6 +27,7 @@ PACKAGES = [["kokoro==0.9.4", "misaki[en,zh]==0.9.4", "transformers>=4.45,<5", "
 # Kokoro splits long text itself (510 phonemes per chunk), so a section can be a
 # short paragraph; prosody is per sentence either way.
 MAX_SECTION_CHARS = 400
+LIVE_SECTION_CHARS = 180
 SAMPLE_RATE = 24000
 
 # Voice-name prefix -> (app language code, display name). The second letter is f/m.
@@ -71,6 +73,7 @@ class KokoroModel:
         self.speakers = [voice for voice in voices if voice_language(voice)]
         self.sr = SAMPLE_RATE
         self.device = worker.device
+        self.segmented_streaming = True
         self.supported_languages = {code: LANGUAGE_LABELS[code] for code in LANGUAGE_LABELS
                                     if any(voice_language(v) == code for v in self.speakers)}
         self.batch_size = 1
@@ -110,6 +113,29 @@ class KokoroModel:
                 wav = self._watermark.apply(wav, sr, "Kokoro")
             results.append(torch.from_numpy(np.ascontiguousarray(wav)).unsqueeze(0))
         return results
+
+    def generate_segmented_pcm(self, text, language_id=None, paragraph_pause=0.35):
+        """Yield completed short Kokoro sections as mono s16le PCM.
+
+        Kokoro does not expose acoustic-token streaming here, so this live mode
+        generates one short speech section at a time. Each section still uses
+        the selected Kokoro voice and the normal per-section AI watermark.
+        Existing seam-gap rules are appended between sections so live playback
+        keeps the same clause/sentence/paragraph rhythm as completed renders.
+        """
+        sections = documents.plan_sections(text, LIVE_SECTION_CHARS)
+        for index, section in enumerate(sections):
+            tensor = self.generate(section.text, language_id=language_id)
+            wav = tensor.squeeze(0).detach().cpu().numpy() if hasattr(tensor, "detach") else np.asarray(tensor)
+            wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+            wav = audio_effects.trim_silence(wav, self.sr)
+            if index < len(sections) - 1:
+                gap = audio_effects.seam_gap(section.boundary, paragraph_pause)
+                if gap > 0:
+                    wav = np.concatenate([wav, np.zeros(int(round(gap * self.sr)), dtype=np.float32)])
+            pcm = (np.clip(wav, -1.0, 1.0) * 32767.0).astype("<i2", copy=False).tobytes()
+            if pcm:
+                yield pcm
 
     def close(self):
         self.worker.close()

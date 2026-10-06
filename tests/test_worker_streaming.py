@@ -19,7 +19,13 @@ def fake_worker(events):
     worker.lock = threading.Lock()
     worker.process = FakeProcess()
     iterator = iter(events)
-    worker._read_reply = lambda: next(iterator)
+    worker.read_count = 0
+
+    def read_reply():
+        worker.read_count += 1
+        return next(iterator)
+
+    worker._read_reply = read_reply
     return worker
 
 
@@ -62,6 +68,7 @@ class WorkerStreamingTests(unittest.TestCase):
         self.assertEqual(next(stream)["event"], "start")
         stream.close()
 
+        self.assertEqual(worker.read_count, 3)  # start was yielded; audio + done were drained
         self.assertTrue(worker.lock.acquire(blocking=False))
         worker.lock.release()
 

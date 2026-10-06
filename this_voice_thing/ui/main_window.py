@@ -434,6 +434,8 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
     def closeEvent(self, event):
         if hasattr(self, "live_audio_output"):
             self.live_audio_output.stop()
+        if hasattr(self, "live_monitor_output"):
+            self.live_monitor_output.stop()
         if getattr(self, "live_speech_thread", None) is not None:
             self.live_speech_thread.stop()
             self.live_speech_thread.wait()

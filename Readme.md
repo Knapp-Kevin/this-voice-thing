@@ -275,6 +275,9 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 **Live Voice** is the direct-to-device speech surface. It uses the same loaded voice, model, language and pronunciation settings as Generate, but sends PCM to a selected audio output instead of waiting for a completed file.
 
 - Type a line and click **Speak**, or press **Ctrl+Enter**.
+- **Mic Effects:** choose a physical microphone and route it directly through the same Local/Discord/Zoom/OBS/virtual-mic outputs without transcribing it. Effects currently include gain, warm/bright tone shaping, and optional compression/limiting; disabling effects is true PCM pass-through.
+- Microphone capture is processed locally in memory and is **not recorded to disk**. External routes still require explicit arming, and local speaker output warns before starting because an open microphone can create feedback.
+- Mic Effects uses a bounded capture buffer and a lower-latency sink policy than TTS. Pitch/formant shifting is intentionally not claimed yet; it needs a realtime-safe implementation rather than reusing the app's offline finishing path.
 - Submit more lines while speech is active; they are queued in order.
 - **Stop current** silences the current utterance immediately and keeps later queued items.
 - **Stop all** discards audible buffered audio and clears the queue.
@@ -322,7 +325,7 @@ For example, with a typical virtual cable:
 4. Click **Arm external route**, then **Test route**.
 5. In Discord/Zoom/etc., choose the paired recording endpoint, often named something like **CABLE Output**, as the microphone.
 
-Exact names depend on the virtual-audio software. This Voice Thing stores the actual Windows/Qt device ID rather than assuming a vendor naming convention. The app-specific profiles now include guided Discord/Zoom/OBS/Other App setup and conservative virtual-cable microphone pairing hints. Audio-clip pads, multiple-board management and global hotkeys remain later slices.
+Exact names depend on the virtual-audio software. This Voice Thing stores the actual Windows/Qt device ID rather than assuming a vendor naming convention. The app-specific profiles include guided Discord/Zoom/OBS/Other App setup and conservative virtual-cable microphone pairing hints. Audio-clip pads, multiple boards, focused shortcuts and opt-in Windows global hotkeys are implemented on the same Live Voice surface.
 
 The desktop Live Voice path does **not** call the local HTTP API. Both surfaces consume the same underlying model streaming capabilities.
 

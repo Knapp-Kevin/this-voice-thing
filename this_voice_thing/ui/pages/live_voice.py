@@ -375,6 +375,9 @@ class LiveVoicePage:
         self._add_live_shortcut(page, "Ctrl+.", self.live_stop_all)
         self._add_live_shortcut(page, "Ctrl+Shift+Return", self.live_repeat_last)
         self._add_live_shortcut(page, "Ctrl+Shift+Enter", self.live_repeat_last)
+        self._add_live_shortcut(page, "Delete", self.live_remove_selected_queue_item)
+        self._add_live_shortcut(page, "Alt+Up", lambda: self.live_move_selected_queue_item(-1))
+        self._add_live_shortcut(page, "Alt+Down", lambda: self.live_move_selected_queue_item(1))
         self._add_live_shortcut(page, "Ctrl+Shift+Up", lambda: self.move_selected_soundboard_pad(-1))
         self._add_live_shortcut(page, "Ctrl+Shift+Down", lambda: self.move_selected_soundboard_pad(1))
         for number in range(1, 10):
@@ -1145,6 +1148,91 @@ class LiveVoicePage:
             self.live_status_label.setText("Stopped")
             self.live_current_label.setText("Nothing speaking.")
 
+    def copy_live_diagnostics(self):
+        profile = self.active_live_route_profile()
+        voice = self.voice_library.get(self.active_voice_id) if self.active_voice_id else None
+        loaded = self.loaded_entry() if self.model is not None else None
+        primary = self.current_live_audio_device()
+        monitor = self.current_live_monitor_device()
+        _count, outstanding_seconds = self._live_outstanding_items()
+        payload = {
+            "model": (
+                {
+                    "label": loaded.get("label"),
+                    "repo_id": loaded.get("repo_id"),
+                    "backend": loaded.get("backend"),
+                    "mode": loaded.get("mode"),
+                }
+                if loaded is not None
+                else None
+            ),
+            "voice": (
+                {
+                    "name": voice.name,
+                    "kind": voice.kind,
+                    "origin": voice.origin or "",
+                }
+                if voice is not None
+                else {"name": self.live_voice_name_label.text(), "kind": "", "origin": ""}
+            ),
+            "delivery": {
+                "mode_label": self.live_mode_label.text(),
+                "provenance_label": self.live_provenance_label.text(),
+                "generation": dict(self.live_last_generation_metrics),
+            },
+            "route": {
+                "profile_id": profile.id,
+                "profile_name": profile.name,
+                "external": bool(profile.external),
+                "armed": bool(self.live_external_armed) if profile.external else False,
+                "primary_device": primary.description() if primary is not None else None,
+                "monitor_enabled": bool(self.live_monitor_checkbox.isChecked()),
+                "monitor_device": monitor.description() if monitor is not None else None,
+            },
+            "primary_sink": self.live_audio_output.last_stats(),
+            "monitor_sink": self.live_monitor_output.last_stats(),
+            "queue": {
+                "pending_items": len(self.live_voice_queue),
+                "estimated_outstanding_seconds": round(outstanding_seconds, 2),
+            },
+        }
+        QApplication.clipboard().setText(json.dumps(payload, indent=2, ensure_ascii=False))
+        self.live_status_label.setText("Live Voice diagnostics copied.")
+
+    def live_remove_selected_queue_item(self):
+        row = self.live_queue_list.currentRow()
+        if not (0 <= row < len(self.live_voice_queue)):
+            return
+        removed = self.live_voice_queue.pop(row)
+        self._refresh_live_queue()
+        self.live_status_label.setText(
+            f"Removed queued item: {str(removed.get('text') or '')[:80]}"
+        )
+        if self.live_queue_list.count():
+            self.live_queue_list.setCurrentRow(min(row, self.live_queue_list.count() - 1))
+
+    def live_move_selected_queue_item(self, direction):
+        row = self.live_queue_list.currentRow()
+        if not (0 <= row < len(self.live_voice_queue)):
+            return
+        target = row + int(direction)
+        if not (0 <= target < len(self.live_voice_queue)):
+            return
+        item = self.live_voice_queue.pop(row)
+        self.live_voice_queue.insert(target, item)
+        self._refresh_live_queue()
+        self.live_queue_list.setCurrentRow(target)
+        self.live_status_label.setText("Queued speech reordered.")
+
+    def live_clear_history(self):
+        count = len(self.live_voice_history)
+        self.live_voice_history.clear()
+        self.live_status_label.setText(
+            f"Cleared {count} session-history item(s)."
+            if count
+            else "Session history is already empty."
+        )
+
     def live_clear_queue(self):
         self.live_voice_queue.clear()
         self._refresh_live_queue()
@@ -1786,9 +1874,15 @@ class LiveVoicePage:
 
     def _refresh_live_queue(self):
         self.live_queue_list.clear()
+        queued_seconds = 0.0
         for index, item in enumerate(self.live_voice_queue, 1):
-            text = item["text"].replace("\n", " ")
+            text = str(item.get("text") or "").replace("\n", " ")
+            queued_seconds += self._estimate_live_item_seconds(text)
             self.live_queue_list.addItem(f"{index}. {text[:120]}")
+        if hasattr(self, "live_queue_pressure_label"):
+            self.live_queue_pressure_label.setText(
+                f"{len(self.live_voice_queue)} queued · ~{queued_seconds:.0f}s"
+            )
 
     def _set_live_generation_busy(self, busy):
         self.live_voice_busy = bool(busy)

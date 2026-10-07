@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from this_voice_thing.core.live_voice import AudioFrame
 from this_voice_thing.engines import rvc
 
 
@@ -77,6 +78,12 @@ def main():
     parser.add_argument("--report", default="", help="Optional JSON file for reproducible benchmark evidence.")
     parser.add_argument("--sample-rate", type=int, default=48000)
     parser.add_argument("--block-ms", type=float, default=250.0)
+    parser.add_argument(
+        "--source-frame-ms",
+        type=float,
+        default=20.0,
+        help="Simulated microphone AudioFrame cadence feeding the RVC block adapter.",
+    )
     parser.add_argument("--crossfade-ms", type=float, default=50.0)
     parser.add_argument("--extra-ms", type=float, default=2500.0)
     parser.add_argument("--pitch", type=float, default=0.0)
@@ -111,7 +118,23 @@ def main():
             extra_ms=args.extra_ms,
         )
         samples = mono_float(args.input, prototype.sample_rate)
-        block = prototype.block_frames
+        source_frames = max(
+            1,
+            int(round(float(args.source_frame_ms) / 1000.0 * prototype.sample_rate)),
+        )
+        if source_frames > prototype.block_frames:
+            parser.error(
+                "--source-frame-ms must not exceed the effective RVC block duration."
+            )
+        adapter = rvc.RVCFrameAdapter(
+            prototype,
+            pitch=args.pitch,
+            formant=args.formant,
+            index_rate=args.index_rate,
+            rms_mix=args.rms_mix,
+            threshold=args.threshold,
+            f0_method=args.f0_method,
+        )
         timings = []
         cpu_times = []
         ratios = []
@@ -121,35 +144,55 @@ def main():
         output = []
         started = time.perf_counter()
 
-        for offset in range(0, len(samples), block):
-            values = samples[offset : offset + block]
-            real_length = len(values)
-            if real_length < block:
-                values = np.pad(values, (0, block - real_length))
-            converted = prototype.process_pcm(
-                pcm16(values),
-                pitch=args.pitch,
-                formant=args.formant,
-                index_rate=args.index_rate,
-                rms_mix=args.rms_mix,
-                threshold=args.threshold,
-                f0_method=args.f0_method,
+        def record_block(frame):
+            values = np.frombuffer(frame.pcm, dtype="<i2").astype(np.float32) / 32768.0
+            output.append(values)
+            metrics = dict(prototype.last_metrics)
+            timings.append(float(metrics["inference_ms"]))
+            if metrics.get("cpu_ms") is not None:
+                cpu_times.append(float(metrics["cpu_ms"]))
+            ratios.append(float(metrics["deadline_ratio"]))
+            if metrics.get("vram_allocated_mb") is not None:
+                vram_allocated.append(float(metrics["vram_allocated_mb"]))
+            if metrics.get("vram_reserved_mb") is not None:
+                vram_reserved.append(float(metrics["vram_reserved_mb"]))
+            if metrics.get("vram_peak_mb") is not None:
+                vram_peak.append(float(metrics["vram_peak_mb"]))
+
+        for offset in range(0, len(samples), source_frames):
+            values = samples[offset : offset + source_frames]
+            frames = adapter.process_frame(
+                AudioFrame(
+                    pcm=pcm16(values),
+                    sample_rate=prototype.sample_rate,
+                    channels=1,
+                    provenance="benchmark-source",
+                )
             )
-            out = np.frombuffer(converted, dtype="<i2").astype(np.float32) / 32768.0
-            output.append(out[:real_length])
-            timings.append(float(prototype.last_metrics["inference_ms"]))
-            if prototype.last_metrics.get("cpu_ms") is not None:
-                cpu_times.append(float(prototype.last_metrics["cpu_ms"]))
-            ratios.append(float(prototype.last_metrics["deadline_ratio"]))
-            if prototype.last_metrics.get("vram_allocated_mb") is not None:
-                vram_allocated.append(float(prototype.last_metrics["vram_allocated_mb"]))
-            if prototype.last_metrics.get("vram_reserved_mb") is not None:
-                vram_reserved.append(float(prototype.last_metrics["vram_reserved_mb"]))
-            if prototype.last_metrics.get("vram_peak_mb") is not None:
-                vram_peak.append(float(prototype.last_metrics["vram_peak_mb"]))
+            if len(frames) > 1:
+                raise RuntimeError(
+                    "Benchmark source frame unexpectedly produced multiple RVC blocks."
+                )
+            for frame in frames:
+                record_block(frame)
+
+        pending_frames = adapter.metrics()["pending_bytes"] // 2
+        if pending_frames:
+            pad_frames = prototype.block_frames - pending_frames
+            frames = adapter.process_frame(
+                AudioFrame(
+                    pcm=b"\x00\x00" * pad_frames,
+                    sample_rate=prototype.sample_rate,
+                    channels=1,
+                    provenance="benchmark-padding",
+                )
+            )
+            for frame in frames:
+                record_block(frame)
 
         elapsed = time.perf_counter() - started
         result = np.concatenate(output) if output else np.zeros(0, dtype=np.float32)
+        result = result[: len(samples)]
         sf.write(args.output, result, prototype.sample_rate, subtype="PCM_16")
 
         audio_seconds = len(samples) / prototype.sample_rate if prototype.sample_rate else 0.0
@@ -182,6 +225,11 @@ def main():
             "output": str(Path(args.output).resolve()),
             "audio_seconds": round(audio_seconds, 4),
             "blocks": len(timings),
+            "source_frame_ms": round(
+                1000.0 * source_frames / prototype.sample_rate,
+                3,
+            ),
+            "adapter": adapter.metrics(),
             "wall_seconds": round(elapsed, 4),
             "wall_rtf": round(elapsed / audio_seconds, 4) if audio_seconds else None,
             "inference_ms": {

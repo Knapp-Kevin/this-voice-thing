@@ -114,7 +114,8 @@ Use a clean spoken source clip, not music:
   --model C:\voices\target.pth ^
   --index C:\voices\target.index ^
   --input C:\clips\speech.wav ^
-  --output C:\clips\converted.wav
+  --output C:\clips\converted.wav ^
+  --report C:\clips\rvc-benchmark.json
 ```
 
 The benchmark reports:
@@ -125,7 +126,11 @@ The benchmark reports:
 - number of blocks that missed their playback deadline;
 - whole-file wall-clock RTF;
 - model load/prewarm timing;
+- worker CPU-time distribution;
+- Torch VRAM allocated/reserved/peak values when CUDA is active;
 - exact upstream revision and settings.
+
+The JSON report is intended to be attached to issue #29 as the benchmark evidence record. GPU utilization percentage is still a target-machine observation (for example via Task Manager or `nvidia-smi`) because polling it inside every inference block would distort the timing being measured.
 
 A deadline ratio below `1.0` means inference finished before that audio block
 would finish playing. Sustained realtime operation needs margin below 1.0, not

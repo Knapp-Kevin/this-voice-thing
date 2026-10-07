@@ -1,5 +1,6 @@
 import base64
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -119,6 +120,28 @@ class RVCWorkerProtocolTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.worker_module = load_worker_module()
+
+    def test_validate_upstream_requires_pinned_source_marker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for path in self.worker_module.required_upstream_files(root):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if path.name == ".this-voice-thing-source.json":
+                    path.write_text(
+                        '{"commit": "wrong"}',
+                        encoding="utf-8",
+                    )
+                else:
+                    path.write_text("", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "source revision mismatch"):
+                self.worker_module.validate_upstream(root)
+
+            (root / ".this-voice-thing-source.json").write_text(
+                json.dumps({"commit": self.worker_module.UPSTREAM_COMMIT}),
+                encoding="utf-8",
+            )
+            self.assertEqual(self.worker_module.validate_upstream(root), root.resolve())
 
     def test_pcm16_decode_requires_exact_frame_count(self):
         raw = np.asarray([0, 100, -100, 32767], dtype="<i2").tobytes()

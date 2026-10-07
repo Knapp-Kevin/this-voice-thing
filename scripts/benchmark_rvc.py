@@ -1,0 +1,227 @@
+"""Offline block benchmark for the isolated RVC prototype.
+
+This script does not open audio devices. It sends one mono PCM file through the
+same fixed-size block protocol intended for future realtime microphone use and
+reports whether inference stays ahead of each block deadline.
+
+Example:
+    python scripts/benchmark_rvc.py --install
+    python scripts/benchmark_rvc.py --model C:\\voices\\target.pth \
+        --index C:\\voices\\target.index --input sample.wav --output converted.wav
+"""
+
+import argparse
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import platform
+import statistics
+import sys
+import time
+
+import numpy as np
+import soundfile as sf
+from scipy.signal import resample_poly
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from this_voice_thing.engines import rvc
+
+
+def mono_float(path, target_rate):
+    data, source_rate = sf.read(path, dtype="float32", always_2d=True)
+    mono = data.mean(axis=1).astype(np.float32, copy=False)
+    if int(source_rate) == int(target_rate):
+        return mono
+    if not len(mono):
+        return mono
+    divisor = math.gcd(int(source_rate), int(target_rate))
+    up = int(target_rate) // divisor
+    down = int(source_rate) // divisor
+    return resample_poly(mono, up, down).astype(np.float32, copy=False)
+
+
+def pcm16(values):
+    return (
+        np.clip(np.asarray(values, dtype=np.float32), -1.0, 1.0) * 32767.0
+    ).astype("<i2", copy=False).tobytes()
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def percentile(values, p):
+    if not values:
+        return None
+    return float(np.percentile(np.asarray(values, dtype=np.float64), p))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--install", action="store_true", help="Install/repair the pinned RVC prototype runtime.")
+    parser.add_argument("--model", help="User-provided RVC .pth target voice model.")
+    parser.add_argument("--index", default="", help="Optional matching RVC .index file.")
+    parser.add_argument("--model-source", default="", help="Source/provenance URL or note for the target voice model.")
+    parser.add_argument("--model-license", default="unknown", help="License/provenance label for the target voice model.")
+    parser.add_argument("--input", help="Mono/stereo source WAV/FLAC/etc. for block benchmarking.")
+    parser.add_argument("--output", default="rvc_benchmark_output.wav")
+    parser.add_argument("--report", default="", help="Optional JSON file for reproducible benchmark evidence.")
+    parser.add_argument("--sample-rate", type=int, default=48000)
+    parser.add_argument("--block-ms", type=float, default=250.0)
+    parser.add_argument("--crossfade-ms", type=float, default=50.0)
+    parser.add_argument("--extra-ms", type=float, default=2500.0)
+    parser.add_argument("--pitch", type=float, default=0.0)
+    parser.add_argument("--formant", type=float, default=0.0)
+    parser.add_argument("--index-rate", type=float, default=0.0)
+    parser.add_argument("--rms-mix", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=-60.0)
+    parser.add_argument("--f0-method", choices=("rmvpe", "fcpe", "pm"), default="rmvpe")
+    args = parser.parse_args()
+
+    if args.install:
+        manifest = rvc.install()
+        print(json.dumps(manifest, indent=2))
+        if not args.model and not args.input:
+            return 0
+
+    if not rvc.is_installed():
+        parser.error("RVC prototype is not installed. Run this script once with --install.")
+    if not args.model:
+        parser.error("--model is required for a benchmark.")
+    if not args.input:
+        parser.error("--input is required for a benchmark.")
+
+    prototype = rvc.RVCPrototype()
+    try:
+        loaded = prototype.load(
+            args.model,
+            args.index,
+            sample_rate=args.sample_rate,
+            block_ms=args.block_ms,
+            crossfade_ms=args.crossfade_ms,
+            extra_ms=args.extra_ms,
+        )
+        samples = mono_float(args.input, prototype.sample_rate)
+        block = prototype.block_frames
+        timings = []
+        cpu_times = []
+        ratios = []
+        vram_allocated = []
+        vram_reserved = []
+        vram_peak = []
+        output = []
+        started = time.perf_counter()
+
+        for offset in range(0, len(samples), block):
+            values = samples[offset : offset + block]
+            real_length = len(values)
+            if real_length < block:
+                values = np.pad(values, (0, block - real_length))
+            converted = prototype.process_pcm(
+                pcm16(values),
+                pitch=args.pitch,
+                formant=args.formant,
+                index_rate=args.index_rate,
+                rms_mix=args.rms_mix,
+                threshold=args.threshold,
+                f0_method=args.f0_method,
+            )
+            out = np.frombuffer(converted, dtype="<i2").astype(np.float32) / 32768.0
+            output.append(out[:real_length])
+            timings.append(float(prototype.last_metrics["inference_ms"]))
+            if prototype.last_metrics.get("cpu_ms") is not None:
+                cpu_times.append(float(prototype.last_metrics["cpu_ms"]))
+            ratios.append(float(prototype.last_metrics["deadline_ratio"]))
+            if prototype.last_metrics.get("vram_allocated_mb") is not None:
+                vram_allocated.append(float(prototype.last_metrics["vram_allocated_mb"]))
+            if prototype.last_metrics.get("vram_reserved_mb") is not None:
+                vram_reserved.append(float(prototype.last_metrics["vram_reserved_mb"]))
+            if prototype.last_metrics.get("vram_peak_mb") is not None:
+                vram_peak.append(float(prototype.last_metrics["vram_peak_mb"]))
+
+        elapsed = time.perf_counter() - started
+        result = np.concatenate(output) if output else np.zeros(0, dtype=np.float32)
+        sf.write(args.output, result, prototype.sample_rate, subtype="PCM_16")
+
+        audio_seconds = len(samples) / prototype.sample_rate if prototype.sample_rate else 0.0
+        model_path = str(Path(args.model).expanduser().resolve())
+        index_path = str(Path(args.index).expanduser().resolve()) if args.index else ""
+        report = {
+            "prototype": {
+                "upstream_commit": rvc.UPSTREAM_COMMIT,
+                "sample_rate": prototype.sample_rate,
+                "block_frames": prototype.block_frames,
+                "block_ms": prototype.block_ms,
+                "load": loaded,
+            },
+            "machine": {
+                "platform": platform.platform(),
+                "controller_python": platform.python_version(),
+            },
+            "target_model": {
+                "path": model_path,
+                "sha256": file_sha256(model_path),
+                "source": args.model_source or None,
+                "license": args.model_license or "unknown",
+                "index_path": index_path or None,
+                "index_sha256": file_sha256(index_path) if index_path else None,
+            },
+            "input": {
+                "path": str(Path(args.input).resolve()),
+                "sha256": file_sha256(args.input),
+            },
+            "output": str(Path(args.output).resolve()),
+            "audio_seconds": round(audio_seconds, 4),
+            "blocks": len(timings),
+            "wall_seconds": round(elapsed, 4),
+            "wall_rtf": round(elapsed / audio_seconds, 4) if audio_seconds else None,
+            "inference_ms": {
+                "median": round(statistics.median(timings), 3) if timings else None,
+                "p95": round(percentile(timings, 95), 3) if timings else None,
+                "max": round(max(timings), 3) if timings else None,
+            },
+            "deadline_ratio": {
+                "median": round(statistics.median(ratios), 4) if ratios else None,
+                "p95": round(percentile(ratios, 95), 4) if ratios else None,
+                "max": round(max(ratios), 4) if ratios else None,
+                "misses": sum(1 for value in ratios if value > 1.0),
+            },
+            "cpu_ms": {
+                "median": round(statistics.median(cpu_times), 3) if cpu_times else None,
+                "p95": round(percentile(cpu_times, 95), 3) if cpu_times else None,
+                "max": round(max(cpu_times), 3) if cpu_times else None,
+            },
+            "vram_mb": {
+                "allocated_max": round(max(vram_allocated), 2) if vram_allocated else None,
+                "reserved_max": round(max(vram_reserved), 2) if vram_reserved else None,
+                "peak_max": round(max(vram_peak), 2) if vram_peak else None,
+            },
+            "settings": {
+                "pitch": args.pitch,
+                "formant": args.formant,
+                "index_rate": args.index_rate,
+                "rms_mix": args.rms_mix,
+                "threshold": args.threshold,
+                "f0_method": args.f0_method,
+            },
+        }
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+        if args.report:
+            Path(args.report).write_text(rendered + "\n", encoding="utf-8")
+        return 0 if not report["deadline_ratio"]["misses"] else 2
+    finally:
+        prototype.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

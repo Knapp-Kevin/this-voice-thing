@@ -438,6 +438,8 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
     def closeEvent(self, event):
         if hasattr(self, "live_hotkeys"):
             self.live_hotkeys.close()
+        if hasattr(self, "live_mic_input"):
+            self.live_mic_input.stop()
         if hasattr(self, "live_audio_output"):
             self.live_audio_output.stop()
         if hasattr(self, "live_monitor_output"):

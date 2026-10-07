@@ -6,14 +6,15 @@ raise ApiError):
 
   health() -> dict             models() -> list         voices() -> list
   synthesize(request: dict) -> dict with "path", "mime", plus details
+  synthesize_stream(request: dict) -> dict with PCM chunk iterator + stream metadata
   transcribe(audio: bytes, filename, language) -> transcription.Transcript
 
 Endpoints
   GET  /v1/health        what's loaded, and whether a request is running
   GET  /v1/models        the model list (what "model" can name)
   GET  /v1/voices        the voice library and the loaded model's built-in voices
-  POST /v1/audio/speech  OpenAI-compatible: {"model", "input", "voice",
-                         "response_format", "speed", "instructions"} -> audio bytes
+  POST /v1/audio/speech  OpenAI-compatible buffered speech, or native PCM streaming
+                         with stream=true, stream_format="audio", response_format="pcm"
   POST /v1/speech        native: {"text", "model", "voice", "format", "subtitles",
                          "speed", "language", "style", "name"} -> JSON with the saved
                          files (chatterbox_outputs/api/) and details
@@ -65,6 +66,7 @@ class LocalApiServer:
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         self.httpd.daemon_threads = True
+        self.port = int(self.httpd.server_address[1])
         self.thread = threading.Thread(target=self.httpd.serve_forever, name="local-api", daemon=True)
         self.thread.start()
         self.log(f"Local API listening on {self.url}")
@@ -79,7 +81,8 @@ class LocalApiServer:
 
 class _Handler(BaseHTTPRequestHandler):
     api = None  # set per server
-    server_version = "ThisVoiceThing/1.0"
+    server_version = "ThisVoiceThing/1.1"
+    protocol_version = "HTTP/1.1"
 
     # --- plumbing ---
 
@@ -105,6 +108,58 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _write_chunk(self, payload):
+        if not payload:
+            return
+        self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
+        self.wfile.write(payload)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
+
+    def _send_pcm_stream(self, result):
+        chunks = iter(result["chunks"])
+        try:
+            first = next(chunks)
+        except StopIteration:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
+            raise ApiError(500, "The model completed without producing any audio.", "server_error")
+        except Exception:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
+            raise
+
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/pcm")
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Audio-Sample-Rate", str(result["sample_rate"]))
+        self.send_header("X-Audio-Sample-Format", result.get("sample_format", "s16le"))
+        self.send_header("X-Audio-Channels", str(result.get("channels", 1)))
+        self.send_header("X-Streaming-Mode", result.get("streaming", "native"))
+        self.send_header("X-Audio-Watermark", result.get("watermark", "unknown"))
+        self.end_headers()
+
+        try:
+            self._write_chunk(first)
+            for chunk in chunks:
+                self._write_chunk(chunk)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+        except Exception as exc:
+            # Headers/audio may already be on the wire, so a JSON error response would
+            # corrupt the stream. Close it and log the terminal failure instead.
+            self.api.log(f"API streaming audio ended early: {type(exc).__name__}: {exc}")
+            self.close_connection = True
+        finally:
+            close = getattr(chunks, "close", None)
+            if close is not None:
+                close()
 
     def _authorized(self):
         token = self.api.token
@@ -179,7 +234,32 @@ class _Handler(BaseHTTPRequestHandler):
         text = str(data.get("input") or "").strip()
         if not text:
             raise ApiError(400, "\"input\" is required.")
-        response_format = str(data.get("response_format") or "mp3").lower()
+        stream = data.get("stream", False)
+        if not isinstance(stream, bool):
+            raise ApiError(400, "stream must be true or false.")
+        response_format = str(data.get("response_format") or ("pcm" if stream else "mp3")).lower()
+
+        if stream:
+            stream_format = str(data.get("stream_format") or "").lower()
+            if stream_format != "audio":
+                raise ApiError(400, 'Native streaming currently requires stream_format="audio".')
+            if response_format != "pcm":
+                raise ApiError(400, 'Native streaming currently requires response_format="pcm".')
+            speed = data.get("speed")
+            if speed not in (None, ""):
+                try:
+                    if abs(float(speed) - 1.0) > 1e-9:
+                        raise ApiError(400, "speed must be 1.0 for live PCM streaming.")
+                except (TypeError, ValueError):
+                    raise ApiError(400, "speed must be a number.")
+            result = self.api.backend.synthesize_stream({
+                "text": text, "model": data.get("model"), "voice": data.get("voice"),
+                "format": "WAV", "speed": 1.0, "style": data.get("instructions"),
+                "save": False, "subtitles": None, "live": True,
+            })
+            self._send_pcm_stream(result)
+            return
+
         if response_format not in OPENAI_FORMATS:
             raise ApiError(400, f"response_format {response_format!r} isn't supported here; "
                                 f"use one of {', '.join(OPENAI_FORMATS)}.")

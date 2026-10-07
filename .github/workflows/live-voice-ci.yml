@@ -1,0 +1,104 @@
+# Live Voice infrastructure checks; keep this workflow lightweight and path-scoped.
+name: Live Voice CI
+
+on:
+  pull_request:
+    paths:
+      - "this_voice_thing/core/live_voice.py"
+      - "this_voice_thing/core/microphone_audio.py"
+      - "this_voice_thing/core/live_routes.py"
+      - "this_voice_thing/core/soundboard.py"
+      - "this_voice_thing/ui/live_audio.py"
+      - "this_voice_thing/ui/live_capture.py"
+      - "this_voice_thing/ui/global_hotkeys.py"
+      - "this_voice_thing/ui/pages/live_voice.py"
+      - "this_voice_thing/ui/pages/model_loading.py"
+      - "tests/test_live_audio.py"
+      - "tests/test_live_capture.py"
+      - "tests/test_live_routes.py"
+      - "tests/test_live_voice.py"
+      - "tests/test_microphone_audio.py"
+      - "tests/test_soundboard.py"
+      - "tests/test_global_hotkeys.py"
+      - ".github/workflows/live-voice-ci.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "this_voice_thing/core/live_voice.py"
+      - "this_voice_thing/core/microphone_audio.py"
+      - "this_voice_thing/core/live_routes.py"
+      - "this_voice_thing/core/soundboard.py"
+      - "this_voice_thing/ui/live_audio.py"
+      - "this_voice_thing/ui/live_capture.py"
+      - "this_voice_thing/ui/global_hotkeys.py"
+      - "tests/test_live_audio.py"
+      - "tests/test_live_routes.py"
+      - "tests/test_live_voice.py"
+      - "tests/test_microphone_audio.py"
+      - "tests/test_soundboard.py"
+      - "tests/test_global_hotkeys.py"
+      - ".github/workflows/live-voice-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-voice-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-voice-infrastructure:
+    name: Live Voice infrastructure (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Linux audio runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpulse0 libegl1 libgl1
+
+      - name: Install lightweight test dependencies
+        run: python -m pip install --upgrade pip numpy==1.26.0 soundfile==0.13.1 PySide6==6.9.0
+
+      - name: Compile Live Voice modules
+        run: >-
+          python -m py_compile
+          this_voice_thing/core/live_voice.py
+          this_voice_thing/core/microphone_audio.py
+          this_voice_thing/core/live_routes.py
+          this_voice_thing/core/soundboard.py
+          this_voice_thing/ui/live_audio.py
+          this_voice_thing/ui/live_capture.py
+          this_voice_thing/ui/global_hotkeys.py
+          this_voice_thing/ui/pages/live_voice.py
+          this_voice_thing/ui/pages/model_loading.py
+
+      - name: Run Live Voice infrastructure tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: >-
+          python -m unittest -v
+          tests.test_live_audio
+          tests.test_live_capture
+          tests.test_live_routes
+          tests.test_live_voice
+          tests.test_microphone_audio
+          tests.test_soundboard
+          tests.test_global_hotkeys

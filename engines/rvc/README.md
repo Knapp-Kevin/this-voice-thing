@@ -71,12 +71,18 @@ integration.
 
 RVC also requires its shared HuBERT and RMVPE assets.
 
-The installer resolves `lj1995/VoiceConversionWebUI` to the repository's
-immutable current SHA at install time, downloads only the required assets at
-that SHA, and records the resolved revision in `engines/rvc/install.json`.
+The canonical feasibility harness in
+`this_voice_thing/engines/rvc_feasibility.py` owns this setup and pins:
 
-This avoids silently treating a floating `main` asset revision as
-reproducible evidence.
+- asset repository: `lj1995/VoiceConversionWebUI`
+- asset revision: `1be9d36ece685661920e1a7cb36eb0437c1e5581`
+- HuBERT model SHA-256:
+  `cc8c20f4b90a520757260197a3ff2505705a7adbd20ad9eeaa4e1a9b38442ef5`
+- RMVPE SHA-256:
+  `6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193`
+
+The realtime prototype reuses that exact environment and asset set instead of
+maintaining a second installer/provenance path.
 
 ## Target voice models
 
@@ -105,14 +111,27 @@ From the repo root:
 .venv\Scripts\python.exe scripts\benchmark_rvc.py --install
 ```
 
-The installer:
+The command delegates environment/source/asset setup to the already-merged
+feasibility harness:
 
-1. downloads the exact pinned upstream source archive;
-2. creates `engines/rvc/.venv` with Python 3.12 through `uv`;
-3. installs the verified CUDA 12.8 Torch/Torchaudio pair first;
-4. installs the pinned upstream dependency set from official package indexes;
-5. resolves/downloads HuBERT + RMVPE at one immutable asset revision;
-6. writes `engines/rvc/install.json`.
+1. checks out the exact RVC source commit with Git;
+2. writes the immutable source marker used by the realtime worker;
+3. creates `engines/rvc/.venv` with Python 3.12 through `uv`;
+4. installs the verified CUDA 12.8 Torch/Torchaudio pair first;
+5. strips upstream mirror directives **and Torch-family lines** from the second
+   requirements stage so that stage cannot silently replace the verified pair;
+6. installs remaining upstream dependencies from official PyPI;
+7. downloads the fixed HuBERT/RMVPE asset revision and verifies both checksums.
+
+The offline harness remains available separately:
+
+```bat
+python scripts\rvc_feasibility.py status
+python scripts\rvc_feasibility.py install
+python scripts\rvc_feasibility.py assets
+```
+
+See `docs/rvc-feasibility.md` for the Phase 1 evidence contract.
 
 The setup is intentionally substantial. RVC is not smuggled into the main app
 environment merely because dependency conflicts are emotionally inconvenient.

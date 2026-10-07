@@ -223,6 +223,7 @@ class MicrophoneBlockProcessor:
         self.input_bytes = 0
         self.output_bytes = 0
         self._remainder = b""
+        self._remainder = b""
 
     @property
     def provenance(self):

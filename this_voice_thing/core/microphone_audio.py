@@ -224,12 +224,14 @@ class MicrophoneBlockProcessor:
         self.output_bytes = 0
         self.discontinuities = 0
         self._remainder = b""
+        self._next_discontinuity = False
 
     def reset_discontinuity(self):
         """Reset state that must not bridge across deliberately dropped audio."""
         self._remainder = b""
         self.effects.reset()
         self.discontinuities += 1
+        self._next_discontinuity = True
 
     @property
     def provenance(self):
@@ -254,10 +256,13 @@ class MicrophoneBlockProcessor:
             return None
         self.blocks += 1
         self.output_bytes += len(processed)
+        discontinuity = bool(self._next_discontinuity)
+        self._next_discontinuity = False
         return AudioFrame(
             pcm=processed,
             sample_rate=int(sample_rate),
             channels=1,
+            discontinuity=discontinuity,
             provenance=self.provenance,
         )
 

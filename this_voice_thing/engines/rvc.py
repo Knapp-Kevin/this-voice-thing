@@ -1,51 +1,40 @@
-"""Isolated RVC prototype lifecycle and block-processing facade.
+"""Realtime RVC prototype facade.
 
-RVC currently targets Python 3.12 and a Torch/CUDA matrix that differs from
-This Voice Thing's normal optional engines. It therefore uses a dedicated
-installer instead of engines.worker.install_env(), which intentionally targets
-the app's Python 3.11 engine convention.
+The canonical feasibility harness owns source checkout, environment creation,
+shared-asset pinning/checksums, and offline smoke conversion. This module layers
+only the realtime worker and shared AudioFrame adapter on top of that harness.
 
-This module does not expose RVC as a normal user-facing model backend yet.
-It exists only for issue #29 feasibility/benchmark work.
+It remains experimental issue #29 infrastructure and is not registered as a
+normal user-facing model backend.
 """
 
 from __future__ import annotations
 
 import base64
-import json
-import os
 from pathlib import Path
-import shutil
-import subprocess
-import tempfile
-import urllib.request
-import zipfile
 
-from this_voice_thing import paths
 from this_voice_thing.core.live_voice import AudioFrame
+from this_voice_thing.engines import rvc_feasibility as feasibility
 from this_voice_thing.engines import worker as engine_worker
 
-NAME = "rvc"
-UPSTREAM_REPO = "RVC-Project/Retrieval-based-Voice-Conversion-WebUI"
-UPSTREAM_COMMIT = "81eed5e8f68b6bed1789f682fe78cdd324495afc"
-UPSTREAM_ARCHIVE = (
-    f"https://github.com/{UPSTREAM_REPO}/archive/{UPSTREAM_COMMIT}.zip"
-)
-ASSET_REPO = "lj1995/VoiceConversionWebUI"
-PYTHON_VERSION = "3.12"
-TORCH_VERSION = "2.7.1+cu128"
-TORCHAUDIO_VERSION = "2.7.1+cu128"
-TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
-PYPI_INDEX = "https://pypi.org/simple"
+NAME = feasibility.NAME
+UPSTREAM_REPO = feasibility.UPSTREAM_REPOSITORY
+UPSTREAM_COMMIT = feasibility.UPSTREAM_COMMIT
+PYTHON_VERSION = feasibility.PYTHON_VERSION
+TORCH_VERSION = feasibility.TORCH_VERSION
+TORCHAUDIO_VERSION = feasibility.TORCHAUDIO_VERSION
+TORCH_INDEX = feasibility.TORCH_INDEX
+PYPI_INDEX = feasibility.PYPI_INDEX
+ASSET_REPO = feasibility.ASSET_REPOSITORY
+ASSET_REVISION = feasibility.ASSET_REVISION
 
-ROOT = Path(engine_worker.engine_dir(NAME))
-PYTHON = Path(engine_worker.venv_python(NAME))
+ROOT = feasibility.ENGINE_DIR
+PYTHON = feasibility.venv_python()
 WORKER = ROOT / "rvc_worker.py"
-UPSTREAM = ROOT / "upstream"
-UPSTREAM_SOURCE_MANIFEST = UPSTREAM / ".this-voice-thing-source.json"
-INSTALL_MANIFEST = ROOT / "install.json"
-SANITIZED_REQUIREMENTS = ROOT / ".runtime-requirements.txt"
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+UPSTREAM = feasibility.SOURCE_DIR
+
+# Backward-compatible name used by existing prototype tests.
+sanitize_upstream_requirements = feasibility.sanitize_requirements
 
 
 def required_upstream_files(root=UPSTREAM):
@@ -55,7 +44,7 @@ def required_upstream_files(root=UPSTREAM):
         root / "infer" / "rtrvc.py",
         root / "tools" / "cuda_graph.py",
         root / "RVCRealtimeVST" / "worker" / "rvc_worker.py",
-        root / "requirments_cu128_py312.txt",
+        root / feasibility.UPSTREAM_REQUIREMENTS,
         root / ".this-voice-thing-source.json",
     )
 
@@ -63,220 +52,47 @@ def required_upstream_files(root=UPSTREAM):
 def required_runtime_assets(root=UPSTREAM):
     root = Path(root)
     return (
-        root / "assets" / "hubert_base" / "config.json",
-        root / "assets" / "hubert_base" / "preprocessor_config.json",
         root / "assets" / "hubert_base" / "pytorch_model.bin",
         root / "assets" / "rmvpe" / "rmvpe.pt",
     )
 
 
 def is_installed():
-    if not PYTHON.is_file() or not WORKER.is_file() or not INSTALL_MANIFEST.is_file():
-        return False
-    if not all(path.is_file() for path in required_upstream_files()):
-        return False
-    if not all(path.is_file() for path in required_runtime_assets()):
-        return False
-    try:
-        manifest = json.loads(INSTALL_MANIFEST.read_text(encoding="utf-8"))
-        source_marker = json.loads(
-            UPSTREAM_SOURCE_MANIFEST.read_text(encoding="utf-8")
-        )
-    except Exception:
-        return False
-    return (
-        manifest.get("upstream_commit") == UPSTREAM_COMMIT
-        and source_marker.get("commit") == UPSTREAM_COMMIT
-        and manifest.get("python") == PYTHON_VERSION
-        and manifest.get("torch") == TORCH_VERSION
+    status = feasibility.status()
+    return bool(
+        status.get("installed")
+        and status.get("shared_assets_ready")
+        and WORKER.is_file()
+        and all(path.is_file() for path in required_upstream_files())
+        and all(path.is_file() for path in required_runtime_assets())
     )
-
-
-def sanitize_upstream_requirements(text):
-    """Remove upstream mirror directives and Torch lines from a pinned file.
-
-    Torch/Torchaudio are installed as an explicit first stage from the official
-    CUDA index. Keeping that stage separate prevents later dependency
-    resolution from silently replacing the verified CUDA build.
-    """
-    cleaned = []
-    for line in str(text).splitlines():
-        stripped = line.strip()
-        lowered = stripped.lower()
-        if lowered.startswith("--index-url") or lowered.startswith("--extra-index-url"):
-            continue
-        if lowered.startswith(("torch==", "torchaudio==", "torchvision==", "torch-directml==")):
-            continue
-        cleaned.append(line)
-    return "\n".join(cleaned).strip() + "\n"
-
-
-def _run(command, log=print, cwd=None):
-    command = [str(part) for part in command]
-    log("Running: " + " ".join(command[:5]) + (" ..." if len(command) > 5 else ""))
-    process = subprocess.Popen(
-        command,
-        cwd=str(cwd) if cwd else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=NO_WINDOW,
-    )
-    for line in process.stdout:
-        log(line.rstrip())
-    code = process.wait()
-    if code != 0:
-        raise RuntimeError(
-            f"RVC setup command failed ({code}): {' '.join(command[:5])}"
-        )
-
-
-def _download_pinned_upstream(log=print):
-    ROOT.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="tvt_rvc_") as temp:
-        archive = Path(temp) / "rvc.zip"
-        log(f"Downloading pinned RVC source {UPSTREAM_COMMIT[:12]}…")
-        urllib.request.urlretrieve(UPSTREAM_ARCHIVE, archive)
-        extract = Path(temp) / "extract"
-        with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(extract)
-        roots = [path for path in extract.iterdir() if path.is_dir()]
-        if len(roots) != 1:
-            raise RuntimeError("Unexpected RVC source archive layout.")
-        if UPSTREAM.exists():
-            shutil.rmtree(UPSTREAM)
-        shutil.move(str(roots[0]), str(UPSTREAM))
-    UPSTREAM_SOURCE_MANIFEST.write_text(
-        json.dumps(
-            {
-                "repository": UPSTREAM_REPO,
-                "commit": UPSTREAM_COMMIT,
-                "archive": UPSTREAM_ARCHIVE,
-            },
-            indent=2,
-        ) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    missing = [str(path) for path in required_upstream_files() if not path.is_file()]
-    if missing:
-        raise RuntimeError("Pinned RVC source is incomplete: " + ", ".join(missing))
-
-
-def _install_runtime_assets(log=print):
-    """Resolve the asset repo to an immutable SHA, download required files, return SHA."""
-    code = (
-        "from huggingface_hub import HfApi,snapshot_download,hf_hub_download;"
-        "from pathlib import Path;"
-        "import shutil;"
-        f"repo={ASSET_REPO!r};"
-        "api=HfApi();sha=api.model_info(repo).sha;"
-        f"root=Path({str(UPSTREAM)!r});"
-        "snapshot_download(repo,revision=sha,allow_patterns=['hubert_base/*'],"
-        "local_dir=str(root/'assets'));"
-        "p=hf_hub_download(repo,'rmvpe.pt',revision=sha);"
-        "(root/'assets'/'rmvpe').mkdir(parents=True,exist_ok=True);"
-        "shutil.copy2(p,root/'assets'/'rmvpe'/'rmvpe.pt');"
-        "print('ASSET_REVISION='+sha)"
-    )
-    process = subprocess.Popen(
-        [str(PYTHON), "-c", code],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=NO_WINDOW,
-    )
-    revision = None
-    for line in process.stdout:
-        line = line.rstrip()
-        log(line)
-        if line.startswith("ASSET_REVISION="):
-            revision = line.partition("=")[2].strip()
-    if process.wait() != 0 or not revision:
-        raise RuntimeError("RVC runtime asset download failed.")
-    return revision
 
 
 def install(log=print):
-    """Install the target RTX-50/CUDA-12.8 RVC prototype environment.
-
-    This is intentionally a prototype installer for issue #29, not a general
-    hardware chooser. CPU/DirectML/pre-RTX50 profiles remain future work if the
-    target-machine benchmark earns product integration.
-    """
-    uv = shutil.which("uv")
-    if not uv:
-        raise RuntimeError("uv was not found on PATH; it is required to install the RVC prototype.")
-
-    _download_pinned_upstream(log)
-
-    ROOT.mkdir(parents=True, exist_ok=True)
-    _run([uv, "venv", str(ROOT / ".venv"), "--python", PYTHON_VERSION, "--clear"], log)
-    _run(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(PYTHON),
-            f"torch=={TORCH_VERSION}",
-            f"torchaudio=={TORCHAUDIO_VERSION}",
-            "--index-url",
-            TORCH_INDEX,
-            "--extra-index-url",
-            PYPI_INDEX,
-        ],
-        log,
-    )
-
-    upstream_requirements = (
-        UPSTREAM / "requirments_cu128_py312.txt"
-    ).read_text(encoding="utf-8")
-    SANITIZED_REQUIREMENTS.write_text(
-        sanitize_upstream_requirements(upstream_requirements),
-        encoding="utf-8",
-        newline="\n",
-    )
-    _run(
-        [
-            uv,
-            "pip",
-            "install",
-            "--python",
-            str(PYTHON),
-            "-r",
-            str(SANITIZED_REQUIREMENTS),
-            "--index-url",
-            PYPI_INDEX,
-        ],
-        log,
-    )
-
-    asset_revision = _install_runtime_assets(log)
-    manifest = {
+    """Install/repair the canonical harness and required realtime assets."""
+    environment = feasibility.install(log=log)
+    assets = None
+    if not environment.get("shared_assets_ready"):
+        assets = feasibility.download_shared_assets(log=log)
+    final = feasibility.status()
+    if not final.get("installed") or not final.get("shared_assets_ready"):
+        raise RuntimeError("RVC feasibility environment/assets did not reach a ready state.")
+    return {
         "engine": NAME,
         "prototype": True,
         "upstream_repo": UPSTREAM_REPO,
         "upstream_commit": UPSTREAM_COMMIT,
-        "upstream_code_license": "MIT",
+        "upstream_code_license": feasibility.UPSTREAM_LICENSE,
         "asset_repo": ASSET_REPO,
-        "asset_revision": asset_revision,
+        "asset_revision": ASSET_REVISION,
         "python": PYTHON_VERSION,
         "torch": TORCH_VERSION,
         "torchaudio": TORCHAUDIO_VERSION,
         "cuda_profile": "cu128",
         "bundled_target_voice_model": False,
+        "environment": final,
+        "assets": assets,
     }
-    INSTALL_MANIFEST.write_text(
-        json.dumps(manifest, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    return manifest
 
 
 class RVCPrototype:

@@ -25,6 +25,11 @@ The RVC worker owns only:
 - RVC pitch/formant/index/RMS/F0 parameters;
 - RVC's internal resampling and SOLA/crossfade state.
 
+The main-process `RVCFrameAdapter` bridges the shared Live Voice `AudioFrame`
+contract to those exact neural blocks. It accepts ordinary short microphone
+frames, buffers only until one complete RVC block is available, and emits
+converted `AudioFrame` objects for the existing router.
+
 No ASR, text generation, or TTS occurs in this path.
 
 ## Pinned upstream
@@ -127,8 +132,15 @@ Use a clean spoken source clip, not music:
   --report C:\clips\rvc-benchmark.json
 ```
 
+The benchmark feeds short microphone-like `AudioFrame` chunks (20 ms by
+default) through `RVCFrameAdapter`, rather than bypassing the adapter with
+perfectly aligned RVC-sized input blocks. The final partial input is padded only
+for the last neural block and trimmed back to the original source length.
+
 The benchmark reports:
 
+- source `AudioFrame` cadence;
+- adapter pending/discontinuity/deadline metrics;
 - block size/deadline;
 - inference time median / p95 / max;
 - deadline ratio median / p95 / max;
@@ -156,11 +168,19 @@ Commands:
 - `probe`
 - `load`
 - `process`
+- `reset`
 - `ping`
 - `shutdown`
 
 `process` receives one exact-size mono signed-16 PCM block and returns one
-same-size block plus inference timing. Audio devices never cross this boundary.
+same-size block plus inference timing.
+
+`reset` clears the temporal input/resample/RMS/SOLA buffers and pitch caches
+without reloading model weights. The frame adapter uses it when the shared
+microphone source marks a capture discontinuity, so RVC never crossfades across
+audio that was deliberately dropped to keep latency bounded.
+
+Audio devices never cross this boundary.
 
 ## Promotion gate
 
@@ -170,6 +190,6 @@ Promotion requires:
 
 - #29 GO recommendation;
 - target-machine latency/utilization/dropout evidence;
-- #30 shared microphone source semantics;
+- #30 shared microphone source semantics (**implemented**);
 - #13 validated route/monitor/Stop foundation;
 - acceptable target-model licensing/provenance.

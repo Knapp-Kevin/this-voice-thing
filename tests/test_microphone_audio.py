@@ -134,6 +134,31 @@ class MicrophoneBlockProcessorTests(unittest.TestCase):
         )
         self.assertEqual(processor.metrics()["partial_frame_bytes"], 0)
 
+    def test_partial_pcm_frame_is_carried_into_next_block(self):
+        processor = MicrophoneBlockProcessor(
+            MicrophoneEffectsConfig(limiter_ceiling_db=0.0)
+        )
+        stereo = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1).tobytes()
+
+        first = processor.process(
+            stereo[:3],
+            sample_rate=48000,
+            channels=2,
+        )
+        second = processor.process(
+            stereo[3:],
+            sample_rate=48000,
+            channels=2,
+        )
+
+        self.assertIsNone(first)
+        self.assertIsNotNone(second)
+        np.testing.assert_array_equal(
+            np.frombuffer(second.pcm, dtype="<i2"),
+            np.asarray([2000, -2000], dtype="<i2"),
+        )
+        self.assertEqual(processor.metrics()["remainder_bytes"], 0)
+
     def test_emits_shared_audio_frame_as_mono(self):
         stereo = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1)
         processor = MicrophoneBlockProcessor(

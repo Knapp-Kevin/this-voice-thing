@@ -243,7 +243,7 @@ It is not required for microphone transformation because existing virtual-audio 
 
 ## Scope S1 — Microphone source + Mic Effects foundation
 
-Status: **READY**
+Status: **IMPLEMENTED / runtime evidence delegated to #13**
 
 Purpose:
 
@@ -283,7 +283,7 @@ Create the low-resource microphone path and prove that realtime capture can reus
 
 ## Scope S2 — Isolated RVC prototype
 
-Status: **READY FOR ISOLATED PROTOTYPE**
+Status: **PORTABLE PROTOTYPE COMPLETE / TARGET EVIDENCE BLOCKED**
 
 Tracking: issue #29.
 
@@ -390,16 +390,31 @@ Extend the Live Voice QA contract with:
 
 ## Actionable frontier
 
-The legal work frontier is:
+Current frontier state:
 
-1. **S1 microphone source + Mic Effects foundation**
-2. **S2 isolated RVC benchmark prototype (#29)**
+1. **S1 microphone source + Mic Effects foundation — implemented** in canonical Live Voice PR #24; remaining physical microphone/latency/soak evidence is owned by #13.
+2. **S2 isolated RVC benchmark prototype — portable implementation complete** in PR #33; the remaining legal action is the target Windows/NVIDIA install + target-model benchmark and GO / NO-GO / RESEARCH-MORE decision under #29.
 
-S3 is not ready until S1, S2, and #13 resolve.
+S3 remains blocked until:
+
+- #29 produces a GO decision from real benchmark evidence; and
+- #13 validates the shared route/monitor/Stop foundation on the target Windows system.
 
 S4 is not ready until S3 exists.
 
 No implementation ticket should currently be created for Seed-VC or a custom Windows virtual microphone.
+
+## Current evidence state
+
+As of 2026-10-07:
+
+- S1 portable implementation and CI are complete; microphone runtime acceptance remains centralized in #13.
+- S2 portable RVC worker/facade/benchmark implementation is complete in PR #33 and green on Windows/Linux CI.
+- S2 now consumes the same shared microphone `AudioFrame` contract established by S1 through a UI-free `RVCFrameAdapter`.
+- microphone capture discontinuities are explicit in `AudioFrame`; the RVC worker resets temporal input/resample/RMS/SOLA state and pitch caches without reloading model weights.
+- the RVC benchmark feeds 20 ms microphone-like source frames through the adapter rather than bypassing it with perfectly aligned neural blocks.
+- target-machine RVC install/model benchmark evidence is still missing because the authorized Windows/NVIDIA host is unavailable.
+- no product-facing AI Voice Conversion UI should be added until #29 produces a GO decision.
 
 ## Expected product sequence
 

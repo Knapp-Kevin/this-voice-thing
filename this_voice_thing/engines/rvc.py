@@ -22,6 +22,7 @@ import urllib.request
 import zipfile
 
 from this_voice_thing import paths
+from this_voice_thing.core.live_voice import AudioFrame
 from this_voice_thing.engines import worker as engine_worker
 
 NAME = "rvc"
@@ -369,5 +370,139 @@ class RVCPrototype:
         }
         return base64.b64decode(reply["data"])
 
+    def reset_stream_state(self):
+        if not self.block_frames:
+            raise RuntimeError("Load an RVC model before resetting stream state.")
+        return self.worker.request(cmd="reset")
+
     def close(self):
         self.worker.close()
+
+
+class RVCFrameAdapter:
+    """Accumulate shared AudioFrame PCM into exact RVC blocks.
+
+    This adapter is intentionally UI-free. It proves that the shared microphone
+    source contract can feed the isolated RVC worker without giving RVC device or
+    routing ownership.
+    """
+
+    def __init__(
+        self,
+        prototype,
+        *,
+        pitch=0.0,
+        formant=0.0,
+        index_rate=0.0,
+        rms_mix=0.5,
+        threshold=-60.0,
+        f0_method="rmvpe",
+    ):
+        if not getattr(prototype, "block_frames", None):
+            raise RuntimeError("Load an RVC model before creating the frame adapter.")
+        if not getattr(prototype, "sample_rate", None):
+            raise RuntimeError("Loaded RVC prototype does not expose a sample rate.")
+        self.prototype = prototype
+        self.sample_rate = int(prototype.sample_rate)
+        self.block_frames = int(prototype.block_frames)
+        self.block_bytes = self.block_frames * 2
+        self.pitch = float(pitch)
+        self.formant = float(formant)
+        self.index_rate = float(index_rate)
+        self.rms_mix = float(rms_mix)
+        self.threshold = float(threshold)
+        self.f0_method = str(f0_method)
+        self._pending = bytearray()
+        self._next_discontinuity = False
+        self.blocks = 0
+        self.input_bytes = 0
+        self.output_bytes = 0
+        self.discontinuities = 0
+        self.deadline_misses = 0
+        self.max_deadline_ratio = 0.0
+
+    def reset_discontinuity(self):
+        self._pending.clear()
+        self.prototype.reset_stream_state()
+        self._next_discontinuity = True
+        self.discontinuities += 1
+
+    def process_frame(self, frame):
+        if frame.sample_format != "s16le":
+            raise ValueError("RVC frame adapter requires signed-16 little-endian PCM.")
+        if int(frame.channels) != 1:
+            raise ValueError("RVC frame adapter requires mono PCM.")
+        if int(frame.sample_rate) != self.sample_rate:
+            raise ValueError(
+                f"RVC frame sample rate must be {self.sample_rate} Hz; "
+                f"received {frame.sample_rate} Hz."
+            )
+        if frame.discontinuity:
+            self.reset_discontinuity()
+
+        raw = bytes(frame.pcm or b"")
+        self.input_bytes += len(raw)
+        self._pending.extend(raw)
+        output = []
+
+        while len(self._pending) >= self.block_bytes:
+            block = bytes(self._pending[: self.block_bytes])
+            del self._pending[: self.block_bytes]
+            converted = self.prototype.process_pcm(
+                block,
+                pitch=self.pitch,
+                formant=self.formant,
+                index_rate=self.index_rate,
+                rms_mix=self.rms_mix,
+                threshold=self.threshold,
+                f0_method=self.f0_method,
+            )
+            if len(converted) != self.block_bytes:
+                raise RuntimeError(
+                    "RVC worker returned a block with an unexpected PCM size."
+                )
+            metrics = dict(getattr(self.prototype, "last_metrics", {}) or {})
+            ratio = metrics.get("deadline_ratio")
+            if ratio is not None:
+                ratio = float(ratio)
+                self.max_deadline_ratio = max(self.max_deadline_ratio, ratio)
+                if ratio > 1.0:
+                    self.deadline_misses += 1
+
+            discontinuity = bool(self._next_discontinuity)
+            self._next_discontinuity = False
+            self.blocks += 1
+            self.output_bytes += len(converted)
+            output.append(
+                AudioFrame(
+                    pcm=bytes(converted),
+                    sample_rate=self.sample_rate,
+                    channels=1,
+                    sample_format="s16le",
+                    discontinuity=discontinuity,
+                    provenance="rvc-neural-conversion",
+                )
+            )
+        return output
+
+    def flush_pending(self):
+        """Discard incomplete input at end/Stop; realtime RVC only accepts full blocks."""
+        discarded = len(self._pending)
+        self._pending.clear()
+        return discarded
+
+    def metrics(self):
+        return {
+            "mode": "rvc-prototype",
+            "sample_rate": self.sample_rate,
+            "block_frames": self.block_frames,
+            "block_ms": round(1000.0 * self.block_frames / self.sample_rate, 3),
+            "blocks": int(self.blocks),
+            "input_bytes": int(self.input_bytes),
+            "output_bytes": int(self.output_bytes),
+            "pending_bytes": len(self._pending),
+            "discontinuities": int(self.discontinuities),
+            "deadline_misses": int(self.deadline_misses),
+            "max_deadline_ratio": round(float(self.max_deadline_ratio), 4),
+            "provenance": "rvc-neural-conversion",
+        }

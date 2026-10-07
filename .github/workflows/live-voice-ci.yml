@@ -99,6 +99,7 @@ jobs:
           this_voice_thing/ui/global_hotkeys.py
           this_voice_thing/ui/pages/live_voice.py
           this_voice_thing/ui/pages/model_loading.py
+          this_voice_thing/engines/rvc_feasibility.py
           this_voice_thing/engines/rvc.py
           engines/rvc/rvc_worker.py
           scripts/benchmark_rvc.py
@@ -113,6 +114,7 @@ jobs:
           tests.test_microphone_audio
           tests.test_live_capture
           tests.test_live_voice
+          tests.test_rvc_feasibility
           tests.test_rvc_prototype
           tests.test_soundboard
           tests.test_global_hotkeys

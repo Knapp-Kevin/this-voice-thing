@@ -44,6 +44,7 @@ def required_upstream_files(root):
         root / "infer" / "rtrvc.py",
         root / "tools" / "cuda_graph.py",
         root / "RVCRealtimeVST" / "worker" / "rvc_worker.py",
+        root / ".this-voice-thing-source.json",
     ]
 
 
@@ -52,6 +53,12 @@ def validate_upstream(root):
     missing = [str(path.relative_to(root)) for path in required_upstream_files(root) if not path.is_file()]
     if missing:
         raise RuntimeError("Pinned RVC checkout is incomplete; missing: " + ", ".join(missing))
+    marker = json.loads((root / ".this-voice-thing-source.json").read_text(encoding="utf-8"))
+    if marker.get("commit") != UPSTREAM_COMMIT:
+        raise RuntimeError(
+            "RVC source revision mismatch: "
+            f"{marker.get('commit') or 'unknown'} != {UPSTREAM_COMMIT}"
+        )
     return root
 
 

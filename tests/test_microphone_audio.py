@@ -175,6 +175,27 @@ class MicrophoneBlockProcessorTests(unittest.TestCase):
         self.assertEqual(processor.metrics()["partial_frame_bytes"], 0)
         self.assertEqual(processor.metrics()["discontinuities"], 1)
 
+    def test_discontinuity_marks_only_next_emitted_frame(self):
+        processor = MicrophoneBlockProcessor(
+            MicrophoneEffectsConfig(limiter_ceiling_db=0.0)
+        )
+        processor.reset_discontinuity()
+
+        first = processor.process(
+            np.asarray([1000, -1000], dtype="<i2").tobytes(),
+            sample_rate=48000,
+            channels=1,
+        )
+        second = processor.process(
+            np.asarray([500, -500], dtype="<i2").tobytes(),
+            sample_rate=48000,
+            channels=1,
+        )
+
+        self.assertTrue(first.discontinuity)
+        self.assertFalse(second.discontinuity)
+        self.assertEqual(processor.metrics()["discontinuities"], 1)
+
     def test_emits_shared_audio_frame_as_mono(self):
         stereo = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1)
         processor = MicrophoneBlockProcessor(

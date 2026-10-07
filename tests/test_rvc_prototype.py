@@ -239,6 +239,44 @@ class RVCWorkerProtocolTests(unittest.TestCase):
             )
             self.assertEqual(self.worker_module.validate_upstream(root), root.resolve())
 
+    def test_reset_stream_state_clears_temporal_buffers_and_parameter_cache(self):
+        class Zeroable:
+            def __init__(self):
+                self.zero_calls = 0
+
+            def zero_(self):
+                self.zero_calls += 1
+                return self
+
+        class RvcState:
+            def __init__(self):
+                self.cache_pitch = Zeroable()
+                self.cache_pitchf = Zeroable()
+
+        class Engine:
+            def __init__(self):
+                self.input_wav = Zeroable()
+                self.input_wav_res = Zeroable()
+                self.rms_buffer = np.ones(8, dtype=np.float32)
+                self.sola_buffer = Zeroable()
+                self.rvc = RvcState()
+                self.last_pitch = 2.0
+                self.last_formant = -0.5
+                self.last_index_rate = 0.75
+
+        engine = Engine()
+        self.worker_module.reset_stream_state(engine)
+
+        self.assertEqual(engine.input_wav.zero_calls, 1)
+        self.assertEqual(engine.input_wav_res.zero_calls, 1)
+        self.assertEqual(engine.sola_buffer.zero_calls, 1)
+        self.assertEqual(engine.rvc.cache_pitch.zero_calls, 1)
+        self.assertEqual(engine.rvc.cache_pitchf.zero_calls, 1)
+        np.testing.assert_array_equal(engine.rms_buffer, np.zeros(8, dtype=np.float32))
+        self.assertIsNone(engine.last_pitch)
+        self.assertIsNone(engine.last_formant)
+        self.assertIsNone(engine.last_index_rate)
+
     def test_pcm16_decode_requires_exact_frame_count(self):
         raw = np.asarray([0, 100, -100, 32767], dtype="<i2").tobytes()
         encoded = base64.b64encode(raw).decode("ascii")

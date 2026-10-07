@@ -157,7 +157,7 @@ class MicrophoneBlockProcessorTests(unittest.TestCase):
             np.frombuffer(second.pcm, dtype="<i2"),
             np.asarray([2000, -2000], dtype="<i2"),
         )
-        self.assertEqual(processor.metrics()["remainder_bytes"], 0)
+        self.assertEqual(processor.metrics()["partial_frame_bytes"], 0)
 
     def test_emits_shared_audio_frame_as_mono(self):
         stereo = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1)

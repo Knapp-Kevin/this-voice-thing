@@ -189,6 +189,7 @@ def main():
                     raise ValueError("f0_method must be rmvpe, fcpe, or pm.")
 
                 started = time.perf_counter()
+                cpu_started = time.process_time()
                 converted = engine.process(
                     audio,
                     float(req.get("pitch", 0.0)),
@@ -199,7 +200,22 @@ def main():
                     methods[method],
                 )
                 inference_ms = (time.perf_counter() - started) * 1000.0
+                cpu_ms = (time.process_time() - cpu_started) * 1000.0
                 deadline_ms = 1000.0 * state["block_frames"] / state["sample_rate"]
+                torch = engine.torch
+                cuda = torch.device(engine.config.device).type == "cuda"
+                vram_allocated_mb = (
+                    torch.cuda.memory_allocated(engine.config.device) / (1024 * 1024)
+                    if cuda else None
+                )
+                vram_reserved_mb = (
+                    torch.cuda.memory_reserved(engine.config.device) / (1024 * 1024)
+                    if cuda else None
+                )
+                vram_peak_mb = (
+                    torch.cuda.max_memory_allocated(engine.config.device) / (1024 * 1024)
+                    if cuda else None
+                )
                 raw = float_to_pcm16(converted)
                 reply(
                     ok=True,
@@ -208,8 +224,12 @@ def main():
                     samples=state["block_frames"],
                     sample_rate=state["sample_rate"],
                     inference_ms=round(inference_ms, 3),
+                    cpu_ms=round(cpu_ms, 3),
                     deadline_ms=round(deadline_ms, 3),
                     deadline_ratio=round(inference_ms / deadline_ms, 4) if deadline_ms else None,
+                    vram_allocated_mb=round(vram_allocated_mb, 2) if vram_allocated_mb is not None else None,
+                    vram_reserved_mb=round(vram_reserved_mb, 2) if vram_reserved_mb is not None else None,
+                    vram_peak_mb=round(vram_peak_mb, 2) if vram_peak_mb is not None else None,
                 )
 
             elif cmd == "ping":

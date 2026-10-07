@@ -91,7 +91,7 @@ class LiveAudioInput(QObject):
             return str(device.description()).encode("utf-8", "replace")
 
     @staticmethod
-    def _format(rate, channels):
+    def _make_format(rate, channels):
         fmt = QAudioFormat()
         fmt.setSampleRate(int(rate))
         fmt.setChannelCount(int(channels))
@@ -114,7 +114,7 @@ class LiveAudioInput(QObject):
 
         for rate in rates:
             for count in channels:
-                fmt = self._format(rate, count)
+                fmt = self._make_format(rate, count)
                 if device.isFormatSupported(fmt):
                     return fmt
 

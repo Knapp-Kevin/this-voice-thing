@@ -38,6 +38,7 @@ ENGINE_DIR = Path(paths.ENGINES_DIR) / NAME
 SOURCE_DIR = ENGINE_DIR / "upstream"
 VENV_DIR = ENGINE_DIR / ".venv"
 SANITIZED_REQUIREMENTS = ENGINE_DIR / "requirements-this-voice-thing.txt"
+SOURCE_MARKER = SOURCE_DIR / ".this-voice-thing-source.json"
 
 
 def venv_python() -> Path:
@@ -57,7 +58,10 @@ def sanitize_requirements(text: str) -> str:
     kept = []
     for raw in str(text or "").splitlines():
         stripped = raw.strip()
-        if stripped.startswith("--index-url") or stripped.startswith("--extra-index-url"):
+        lowered = stripped.lower()
+        if lowered.startswith("--index-url") or lowered.startswith("--extra-index-url"):
+            continue
+        if lowered.startswith(("torch==", "torchaudio==", "torchvision==", "torch-directml==")):
             continue
         kept.append(raw.rstrip())
     return "\n".join(kept).rstrip() + "\n"
@@ -225,12 +229,20 @@ def status() -> dict:
             python_version = "unavailable"
     hubert = SOURCE_DIR / "assets" / "hubert_base" / "pytorch_model.bin"
     rmvpe = SOURCE_DIR / "assets" / "rmvpe" / "rmvpe.pt"
+    marker_matches = False
+    if SOURCE_MARKER.is_file():
+        try:
+            marker = json.loads(SOURCE_MARKER.read_text(encoding="utf-8"))
+            marker_matches = marker.get("commit") == UPSTREAM_COMMIT
+        except Exception:
+            marker_matches = False
     return {
         "engine": NAME,
         "upstream_repository": UPSTREAM_REPOSITORY,
         "expected_revision": UPSTREAM_COMMIT,
         "source_revision": revision,
         "source_matches_pin": revision == UPSTREAM_COMMIT,
+        "source_marker_matches": marker_matches,
         "upstream_license": UPSTREAM_LICENSE,
         "asset_repository": ASSET_REPOSITORY,
         "asset_revision": ASSET_REVISION,
@@ -240,7 +252,11 @@ def status() -> dict:
         "python": str(python),
         "python_exists": python.exists(),
         "python_version": python_version,
-        "installed": bool(python.exists() and revision == UPSTREAM_COMMIT),
+        "installed": bool(
+            python.exists()
+            and revision == UPSTREAM_COMMIT
+            and marker_matches
+        ),
         "source_dir": str(SOURCE_DIR),
         "venv_dir": str(VENV_DIR),
     }
@@ -272,6 +288,17 @@ def install(*, reset: bool = False, log=print) -> dict:
     requirement_path = SOURCE_DIR / UPSTREAM_REQUIREMENTS
     if not requirement_path.is_file():
         raise RuntimeError(f"Pinned RVC requirements file is missing: {requirement_path}")
+    SOURCE_MARKER.write_text(
+        json.dumps(
+            {
+                "repository": UPSTREAM_REPOSITORY,
+                "commit": UPSTREAM_COMMIT,
+                "license": UPSTREAM_LICENSE,
+            },
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+    )
     SANITIZED_REQUIREMENTS.write_text(
         sanitize_requirements(requirement_path.read_text(encoding="utf-8")),
         encoding="utf-8",

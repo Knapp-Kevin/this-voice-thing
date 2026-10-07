@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -24,9 +25,11 @@ from PySide6.QtWidgets import (
 
 from this_voice_thing.core import live_routes, soundboard, voice_library
 from this_voice_thing.core.live_voice import AudioFileSpeechSession, CachedSpeechSession, LiveSpeechSession
+from this_voice_thing.core.microphone_audio import MicrophoneEffectsConfig
 from this_voice_thing.engines import vibevoice as vibevoice_engine
 from this_voice_thing.ui.global_hotkeys import GlobalHotkeyManager, HotkeyError, normalize_hotkey
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
+from this_voice_thing.ui.live_capture import LiveAudioInput
 from this_voice_thing.ui import theme as ui_theme
 
 
@@ -57,6 +60,11 @@ class LiveVoicePage:
         self.live_external_armed = False
         self.live_board_defaults_applied = False
 
+        self.live_mic_input = LiveAudioInput(self)
+        self.live_mic_input.frame_ready.connect(self.on_live_mic_frame)
+        self.live_mic_input.failed.connect(self.on_live_mic_error)
+        self.live_mic_input.stopped.connect(self.on_live_mic_stopped)
+
         self.live_audio_output = LiveAudioOutput(self)
         self.live_audio_output.failed.connect(self.on_live_audio_error)
         self.live_audio_output.drained.connect(self.on_live_audio_drained)
@@ -70,7 +78,7 @@ class LiveVoicePage:
 
         page, layout = self._make_page(
             "Live Voice",
-            "Type, speak, queue, and route the current voice directly to an audio device.",
+            "Type text or use a microphone, then route the audio directly to an output device.",
         )
 
         route_card, route_layout = self._make_card("Voice & route")
@@ -173,7 +181,89 @@ class LiveVoicePage:
         self.live_monitor_status.setObjectName("Muted")
         monitor_row.addWidget(self.live_monitor_status)
         route_layout.addLayout(monitor_row)
+
+        source_row = QHBoxLayout()
+        source_row.addWidget(QLabel("Source"))
+        self.live_source_mode_combo = QComboBox()
+        self.live_source_mode_combo.addItem("Live Speak", "tts")
+        self.live_source_mode_combo.addItem("Mic Effects", "mic_effects")
+        self.live_source_mode_combo.currentIndexChanged.connect(
+            self.on_live_source_mode_changed
+        )
+        source_row.addWidget(self.live_source_mode_combo)
+        source_row.addStretch(1)
+        route_layout.addLayout(source_row)
         layout.addWidget(route_card)
+
+        mic_card, mic_layout = self._make_card("Mic Effects")
+        mic_settings = self.app_settings.setdefault("live_voice", {}).setdefault(
+            "microphone", {}
+        )
+        mic_input_row = QHBoxLayout()
+        mic_input_row.addWidget(QLabel("Microphone"))
+        self.live_mic_input_combo = QComboBox()
+        self.live_mic_input_combo.setMinimumWidth(320)
+        self.live_mic_input_combo.currentIndexChanged.connect(
+            self.on_live_mic_input_changed
+        )
+        mic_input_row.addWidget(self.live_mic_input_combo, 1)
+        refresh_mics = self._link(QPushButton("Refresh devices"))
+        refresh_mics.clicked.connect(self.refresh_live_audio_devices)
+        mic_input_row.addWidget(refresh_mics)
+        self.live_mic_start_button = self._accent(QPushButton("Start microphone"))
+        self.live_mic_start_button.clicked.connect(self.toggle_live_microphone)
+        mic_input_row.addWidget(self.live_mic_start_button)
+        mic_layout.addLayout(mic_input_row)
+
+        effects_row = QHBoxLayout()
+        self.live_mic_effects_enabled = QCheckBox("Enable effects")
+        self.live_mic_effects_enabled.setChecked(
+            bool(mic_settings.get("effects_enabled", True))
+        )
+        self.live_mic_effects_enabled.toggled.connect(
+            self.on_live_mic_effect_setting_changed
+        )
+        effects_row.addWidget(self.live_mic_effects_enabled)
+
+        effects_row.addWidget(QLabel("Gain dB"))
+        self.live_mic_gain = QDoubleSpinBox()
+        self.live_mic_gain.setRange(-24.0, 24.0)
+        self.live_mic_gain.setDecimals(1)
+        self.live_mic_gain.setSingleStep(1.0)
+        self.live_mic_gain.setValue(float(mic_settings.get("gain_db", 0.0)))
+        self.live_mic_gain.valueChanged.connect(
+            self.on_live_mic_effect_setting_changed
+        )
+        effects_row.addWidget(self.live_mic_gain)
+
+        effects_row.addWidget(QLabel("Tone"))
+        self.live_mic_tone = QDoubleSpinBox()
+        self.live_mic_tone.setRange(-1.0, 1.0)
+        self.live_mic_tone.setDecimals(2)
+        self.live_mic_tone.setSingleStep(0.1)
+        self.live_mic_tone.setValue(float(mic_settings.get("tone", 0.0)))
+        self.live_mic_tone.setToolTip("-1 warmer/darker · +1 brighter")
+        self.live_mic_tone.valueChanged.connect(
+            self.on_live_mic_effect_setting_changed
+        )
+        effects_row.addWidget(self.live_mic_tone)
+
+        self.live_mic_compressor = QCheckBox("Compressor")
+        self.live_mic_compressor.setChecked(
+            bool(mic_settings.get("compressor_enabled", True))
+        )
+        self.live_mic_compressor.toggled.connect(
+            self.on_live_mic_effect_setting_changed
+        )
+        effects_row.addWidget(self.live_mic_compressor)
+
+        effects_row.addStretch(1)
+        self.live_mic_status_label = QLabel("Microphone stopped")
+        self.live_mic_status_label.setObjectName("Muted")
+        effects_row.addWidget(self.live_mic_status_label)
+        mic_layout.addLayout(effects_row)
+
+        layout.addWidget(mic_card)
 
         speak_card, speak_layout = self._make_card("Live Speak")
         self.live_text_input = QPlainTextEdit()
@@ -408,6 +498,7 @@ class LiveVoicePage:
         self.refresh_soundboard_board_defaults()
         self.refresh_live_global_hotkeys()
         self.update_live_route_state()
+        self.on_live_source_mode_changed(self.live_source_mode_combo.currentIndex())
 
     def _add_live_shortcut(self, page, sequence, callback):
         shortcut = QShortcut(QKeySequence(sequence), page)
@@ -436,7 +527,13 @@ class LiveVoicePage:
         else:
             readiness = "Voice model: load one to speak"
         self.live_model_label.setToolTip(readiness)
-        if self.model is None:
+        mic_mode = (
+            hasattr(self, "live_source_mode_combo")
+            and self.live_source_mode_combo.currentData() == "mic_effects"
+        )
+        if mic_mode:
+            mode = "Mic Effects"
+        elif self.model is None:
             mode = "Unavailable"
         elif getattr(self.model, "native_streaming", False):
             mode = "Native streaming"
@@ -517,6 +614,229 @@ class LiveVoicePage:
     def _device_id_hex(device):
         return LiveAudioOutput.device_key(device).hex()
 
+    def _live_mic_settings(self):
+        return self.app_settings.setdefault("live_voice", {}).setdefault(
+            "microphone", {}
+        )
+
+    def current_live_microphone_device(self):
+        if not hasattr(self, "live_mic_input_combo"):
+            return None
+        index = self.live_mic_input_combo.currentData()
+        if not isinstance(index, int) or not (0 <= index < len(self.live_audio_inputs)):
+            return None
+        return self.live_audio_inputs[index]
+
+    def refresh_live_microphone_devices(self):
+        if not hasattr(self, "live_mic_input_combo"):
+            return
+        settings = self._live_mic_settings()
+        saved_id = str(settings.get("device_id", "") or "")
+        saved_name = str(settings.get("device_name", "") or "")
+        combo = self.live_mic_input_combo
+        combo.blockSignals(True)
+        combo.clear()
+
+        chosen = -1
+        for index, device in enumerate(self.live_audio_inputs):
+            if saved_id and self._device_id_hex(device) == saved_id:
+                chosen = index
+                break
+
+        if saved_id and chosen < 0:
+            combo.addItem(
+                f"Unavailable: {saved_name or 'saved microphone'} — choose another input",
+                None,
+            )
+        elif not saved_id:
+            combo.addItem("Choose a microphone/input device…", None)
+
+        for index, device in enumerate(self.live_audio_inputs):
+            combo.addItem(device.description(), index)
+
+        if chosen >= 0:
+            item_index = combo.findData(chosen)
+            if item_index >= 0:
+                combo.setCurrentIndex(item_index)
+        else:
+            combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+
+    def on_live_mic_input_changed(self, _index):
+        device = self.current_live_microphone_device()
+        settings = self._live_mic_settings()
+        if device is None:
+            settings["device_id"] = ""
+            settings["device_name"] = ""
+        else:
+            settings["device_id"] = self._device_id_hex(device)
+            settings["device_name"] = device.description()
+        self.save_app_settings()
+
+    def on_live_source_mode_changed(self, _index):
+        mode = (
+            self.live_source_mode_combo.currentData()
+            if hasattr(self, "live_source_mode_combo")
+            else "tts"
+        )
+        mic_mode = mode == "mic_effects"
+        if not mic_mode and hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            self.stop_live_microphone()
+
+        busy = bool(getattr(self, "live_voice_busy", False))
+        if hasattr(self, "live_text_input"):
+            self.live_text_input.setEnabled(not mic_mode and not busy)
+        if hasattr(self, "live_speak_button"):
+            self.live_speak_button.setEnabled(not mic_mode and not busy)
+        for widget_name in (
+            "live_mic_input_combo",
+            "live_mic_effects_enabled",
+            "live_mic_gain",
+            "live_mic_tone",
+            "live_mic_compressor",
+        ):
+            widget = getattr(self, widget_name, None)
+            if widget is not None:
+                widget.setEnabled(mic_mode and not busy)
+        if hasattr(self, "live_mic_start_button"):
+            self.live_mic_start_button.setEnabled(mic_mode)
+        if mic_mode:
+            self.live_mode_label.setText("Microphone effects")
+            self.live_provenance_label.setText("Provenance: live microphone · not recorded")
+
+    def on_live_mic_effect_setting_changed(self, *_args):
+        if not hasattr(self, "live_mic_effects_enabled"):
+            return
+        settings = self._live_mic_settings()
+        settings["effects_enabled"] = bool(self.live_mic_effects_enabled.isChecked())
+        settings["gain_db"] = float(self.live_mic_gain.value())
+        settings["tone"] = float(self.live_mic_tone.value())
+        settings["compressor_enabled"] = bool(self.live_mic_compressor.isChecked())
+        self.save_app_settings()
+
+    def _live_mic_effects_config(self):
+        if not self.live_mic_effects_enabled.isChecked():
+            return MicrophoneEffectsConfig(limiter_ceiling_db=0.0)
+        return MicrophoneEffectsConfig(
+            gain_db=float(self.live_mic_gain.value()),
+            tone=float(self.live_mic_tone.value()),
+            compressor_enabled=bool(self.live_mic_compressor.isChecked()),
+            compressor_threshold_db=-18.0,
+            compressor_ratio=3.0,
+            limiter_ceiling_db=-1.0,
+        )
+
+    def toggle_live_microphone(self):
+        if self.live_mic_input.is_active():
+            self.stop_live_microphone()
+        else:
+            self.start_live_microphone()
+
+    def start_live_microphone(self):
+        if self.live_source_mode_combo.currentData() != "mic_effects":
+            return
+        route_problem = self.live_route_problem()
+        if route_problem:
+            QMessageBox.information(self, "Mic Effects route", route_problem)
+            return
+        if (
+            self.live_speech_thread is not None
+            or self.live_voice_queue
+            or self.live_audio_output.is_playing()
+            or self.live_monitor_output.is_playing()
+        ):
+            QMessageBox.information(
+                self,
+                "Mic Effects",
+                "Stop current Live Voice playback and clear queued speech before starting the microphone.",
+            )
+            return
+
+        microphone = self.current_live_microphone_device()
+        if microphone is None:
+            QMessageBox.information(
+                self, "Mic Effects", "Choose a microphone/input device first."
+            )
+            return
+
+        output = self.current_live_audio_device()
+        profile = self.active_live_route_profile()
+        if (
+            not profile.external
+            and output is not None
+            and not live_routes.probably_headphones(output.description())
+        ):
+            answer = QMessageBox.question(
+                self,
+                "Microphone feedback risk",
+                "The selected local output does not look like headphones. "
+                "Sending a live microphone to speakers can create loud feedback. Continue anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
+        self.live_voice_last_error = ""
+        try:
+            meta = self.live_mic_input.configure(
+                microphone,
+                self._live_mic_effects_config(),
+            )
+            meta["mode"] = "microphone"
+            self.on_live_stream_started(meta)
+            if self.live_voice_last_error:
+                return
+            self.live_mic_input.start()
+        except Exception as exc:
+            self.live_mic_input.stop()
+            self.live_audio_output.stop()
+            self.live_monitor_output.stop()
+            QMessageBox.warning(self, "Mic Effects", str(exc))
+            return
+
+        self.live_voice_stop_all_requested = False
+        self._set_live_generation_busy(True)
+        self.live_mic_start_button.setText("Stop microphone")
+        self.live_mic_start_button.setEnabled(True)
+        self.live_mic_status_label.setText(
+            f"LIVE · {microphone.description()} · audio is not being recorded"
+        )
+        self.live_current_label.setText("Microphone effects active.")
+
+    def stop_live_microphone(self):
+        if not hasattr(self, "live_mic_input"):
+            return
+        was_active = self.live_mic_input.is_active()
+        self.live_mic_input.stop()
+        self.live_audio_output.stop()
+        self.live_monitor_output.stop()
+        self._set_live_generation_busy(False)
+        if hasattr(self, "live_mic_start_button"):
+            self.live_mic_start_button.setText("Start microphone")
+        if hasattr(self, "live_mic_status_label"):
+            self.live_mic_status_label.setText("Microphone stopped")
+        if was_active:
+            self.live_current_label.setText("Microphone stopped.")
+            self.live_status_label.setText("Stopped")
+            if self.live_voice_queue and self.live_speech_thread is None:
+                self._live_start_next()
+
+    def on_live_mic_frame(self, frame):
+        if not self.live_mic_input.is_active():
+            return
+        self.on_live_frame(frame)
+
+    def on_live_mic_error(self, message):
+        self.live_voice_last_error = str(message)
+        self.stop_live_microphone()
+        self.live_status_label.setText(f"Microphone error: {message}")
+        self.set_status_message(f"Status: Live Voice microphone error: {message}")
+
+    def on_live_mic_stopped(self, metrics):
+        self.live_last_generation_metrics = dict(metrics or {})
+        self._refresh_live_stop_buttons()
+
     def active_live_route_profile(self):
         return self.live_route_store.active()
 
@@ -567,6 +887,7 @@ class LiveVoicePage:
             return
         self.live_audio_devices = list(self.media_devices.audioOutputs())
         self.live_audio_inputs = list(self.media_devices.audioInputs())
+        self.refresh_live_microphone_devices()
         profile = self.active_live_route_profile()
 
         missing_primary = self._fill_live_device_combo(
@@ -851,6 +1172,11 @@ class LiveVoicePage:
         return ""
 
     def live_test_route(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            QMessageBox.information(
+                self, "Test route", "Stop the live microphone before running the spoken route test."
+            )
+            return
         problem = self.live_route_problem()
         if problem:
             QMessageBox.information(self, "Test route", problem)
@@ -901,6 +1227,11 @@ class LiveVoicePage:
         )
 
     def live_submit(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            QMessageBox.information(
+                self, "Live Voice", "Stop Mic Effects before sending typed speech."
+            )
+            return
         text = self.live_text_input.toPlainText().strip()
         if not text:
             return
@@ -978,8 +1309,19 @@ class LiveVoicePage:
         if device is None:
             self.on_live_audio_error("The selected primary audio output disappeared.")
             return
+        mode = str(meta.get("mode") or "buffered")
+        low_latency = mode == "microphone"
+        sink_kwargs = (
+            {"start_buffer_seconds": 0.02, "sink_buffer_seconds": 0.10}
+            if low_latency
+            else {}
+        )
         try:
-            self.live_audio_output.configure(device, int(meta["sample_rate"]))
+            self.live_audio_output.configure(
+                device,
+                int(meta["sample_rate"]),
+                **sink_kwargs,
+            )
         except Exception as exc:
             self.on_live_audio_error(str(exc))
             return
@@ -995,7 +1337,11 @@ class LiveVoicePage:
                 self.live_monitor_status.setText("Monitor matches primary; not duplicated.")
             else:
                 try:
-                    self.live_monitor_output.configure(monitor, int(meta["sample_rate"]))
+                    self.live_monitor_output.configure(
+                        monitor,
+                        int(meta["sample_rate"]),
+                        **sink_kwargs,
+                    )
                     if (
                         self.active_live_route_profile().external
                         and not live_routes.probably_headphones(monitor.description())
@@ -1008,7 +1354,6 @@ class LiveVoicePage:
                 except Exception as exc:
                     self.on_live_monitor_error(str(exc))
 
-        mode = str(meta.get("mode") or "buffered")
         self.live_mode_label.setText(
             {
                 "native": "Native streaming",
@@ -1016,6 +1361,7 @@ class LiveVoicePage:
                 "cached": "Cached playback",
                 "audio": "Audio clip",
                 "buffered": "Buffered fallback",
+                "microphone": "Mic Effects",
             }.get(mode, mode.replace("_", " ").title())
         )
         provenance = str(meta.get("provenance") or "")
@@ -1025,6 +1371,8 @@ class LiveVoicePage:
             "buffered-engine-default": "Provenance: buffered · engine/default policy",
             "soundboard-cache-unknown": "Provenance: cached · original watermark state unknown",
             "soundboard-audio-file": "Provenance: local audio clip · source file",
+            "microphone-passthrough": "Provenance: live microphone · pass-through · not recorded",
+            "microphone-dsp": "Provenance: live microphone · local DSP · not recorded",
         }
         if mode == "cached":
             cached_labels = {
@@ -1049,7 +1397,11 @@ class LiveVoicePage:
             self.live_provenance_label.setText(f"Provenance: {provenance}")
         else:
             self.live_provenance_label.setText("Provenance: unavailable")
-        verb = "Playing" if mode in ("cached", "audio") else "Generating"
+        verb = (
+            "Listening"
+            if mode == "microphone"
+            else ("Playing" if mode in ("cached", "audio") else "Generating")
+        )
         self.live_status_label.setText(
             f"{verb} · {mode} · {device.description()}"
         )
@@ -1124,6 +1476,9 @@ class LiveVoicePage:
             self.live_current_label.setText("Finishing playback…")
 
     def live_stop_current(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            self.stop_live_microphone()
+            return
         if (
             self.live_speech_thread is None
             and not self.live_audio_output.is_playing()
@@ -1144,6 +1499,8 @@ class LiveVoicePage:
         self.live_voice_stop_all_requested = True
         self.live_voice_queue.clear()
         self._refresh_live_queue()
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            self.stop_live_microphone()
         self.live_audio_output.stop()
         self.live_monitor_output.stop()
         if self.live_speech_thread is not None:
@@ -1197,6 +1554,11 @@ class LiveVoicePage:
             },
             "primary_sink": self.live_audio_output.last_stats(),
             "monitor_sink": self.live_monitor_output.last_stats(),
+            "microphone": (
+                self.live_mic_input.last_stats()
+                if hasattr(self, "live_mic_input")
+                else {}
+            ),
             "queue": {
                 "pending_items": len(self.live_voice_queue),
                 "estimated_outstanding_seconds": round(outstanding_seconds, 2),
@@ -1717,10 +2079,17 @@ class LiveVoicePage:
             or self.live_voice_queue
             or self.live_audio_output.is_playing()
             or self.live_monitor_output.is_playing()
+            or (
+                hasattr(self, "live_mic_input")
+                and self.live_mic_input.is_active()
+            )
         )
 
     def _enqueue_soundboard_item(self, item, pad, interactive=True):
         policy = self._soundboard_trigger_policy(pad)
+        mic_active = (
+            hasattr(self, "live_mic_input") and self.live_mic_input.is_active()
+        )
         busy = self._soundboard_is_busy()
         if policy == "ignore" and busy:
             self.soundboard_status_label.setText(
@@ -1741,8 +2110,9 @@ class LiveVoicePage:
             self.live_voice_queue.insert(0, queued)
             self._refresh_live_queue()
             self.live_stop_current()
+            mic_active = False
 
-        if self.live_speech_thread is None:
+        if self.live_speech_thread is None and not mic_active:
             self._live_start_next()
         return True
 
@@ -2101,9 +2471,14 @@ class LiveVoicePage:
 
     def _set_live_generation_busy(self, busy):
         self.live_voice_busy = bool(busy)
+        mic_active = (
+            hasattr(self, "live_mic_input") and self.live_mic_input.is_active()
+        )
         audible = self.live_audio_output.is_playing() or self.live_monitor_output.is_playing()
-        self.live_stop_current_button.setEnabled(busy or audible)
-        self.live_stop_all_button.setEnabled(busy or audible or bool(self.live_voice_queue))
+        self.live_stop_current_button.setEnabled(busy or audible or mic_active)
+        self.live_stop_all_button.setEnabled(
+            busy or audible or mic_active or bool(self.live_voice_queue)
+        )
         self.live_output_combo.setEnabled(not busy)
         self.live_route_profile_combo.setEnabled(not busy)
         self.live_arm_button.setEnabled(not busy)
@@ -2111,27 +2486,64 @@ class LiveVoicePage:
         self.live_route_setup_button.setEnabled(not busy)
         self.live_monitor_checkbox.setEnabled(not busy)
         self.live_monitor_combo.setEnabled(not busy and self.live_monitor_checkbox.isChecked())
+        if hasattr(self, "live_source_mode_combo"):
+            self.live_source_mode_combo.setEnabled(not busy)
+        if hasattr(self, "live_mic_input_combo"):
+            self.live_mic_input_combo.setEnabled(not busy)
+            self.live_mic_effects_enabled.setEnabled(not busy)
+            self.live_mic_gain.setEnabled(not busy)
+            self.live_mic_tone.setEnabled(not busy)
+            self.live_mic_compressor.setEnabled(not busy)
+            self.live_mic_start_button.setEnabled(
+                mic_active or (
+                    not busy
+                    and self.live_source_mode_combo.currentData() == "mic_effects"
+                )
+            )
+        tts_mode = (
+            not hasattr(self, "live_source_mode_combo")
+            or self.live_source_mode_combo.currentData() == "tts"
+        )
+        if hasattr(self, "live_text_input"):
+            self.live_text_input.setEnabled(not busy and tts_mode)
+        if hasattr(self, "live_speak_button"):
+            self.live_speak_button.setEnabled(not busy and tts_mode)
         other_busy = getattr(self, "model_is_loading", False) or self.api_busy
         self.model_repo_combo.setEnabled(not busy and not other_busy)
         self.generate_button.setEnabled(not busy and not other_busy and self.model is not None)
         self.preview_button.setEnabled(not busy and not other_busy and self.model is not None)
 
     def _refresh_live_stop_buttons(self):
-        audible = self.live_audio_output.is_playing() or self.live_monitor_output.is_playing()
-        self.live_stop_current_button.setEnabled(self.live_voice_busy or audible)
-        self.live_stop_all_button.setEnabled(
-            self.live_voice_busy or audible or bool(self.live_voice_queue)
+        mic_active = (
+            hasattr(self, "live_mic_input") and self.live_mic_input.is_active()
         )
-        return audible
+        audible = self.live_audio_output.is_playing() or self.live_monitor_output.is_playing()
+        self.live_stop_current_button.setEnabled(
+            self.live_voice_busy or audible or mic_active
+        )
+        self.live_stop_all_button.setEnabled(
+            self.live_voice_busy or audible or mic_active or bool(self.live_voice_queue)
+        )
+        return audible or mic_active
 
     def on_live_buffer_changed(self, milliseconds):
         audible = self._refresh_live_stop_buttons() or milliseconds > 1.0
         if audible:
-            self.live_status_label.setText(
-                f"Speaking · {milliseconds / 1000.0:.2f}s buffered"
-            )
+            if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+                self.live_status_label.setText(
+                    f"Mic Effects live · {milliseconds / 1000.0:.2f}s buffered"
+                )
+            else:
+                self.live_status_label.setText(
+                    f"Speaking · {milliseconds / 1000.0:.2f}s buffered"
+                )
 
     def on_live_audio_drained(self):
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            self._refresh_live_stop_buttons()
+            self.live_current_label.setText("Microphone effects active.")
+            self.live_status_label.setText("Mic Effects live")
+            return
         if self.live_speech_thread is None and not self.live_voice_queue:
             if self.live_audio_output.is_playing() or self.live_monitor_output.is_playing():
                 self._refresh_live_stop_buttons()
@@ -2152,6 +2564,8 @@ class LiveVoicePage:
 
     def on_live_audio_error(self, message):
         self.live_voice_last_error = str(message)
+        if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
+            self.stop_live_microphone()
         self.live_voice_queue.clear()
         self._refresh_live_queue()
         self.live_audio_output.stop()

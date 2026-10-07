@@ -7,6 +7,7 @@ import unittest
 
 import numpy as np
 
+from this_voice_thing.core.live_voice import AudioFrame
 from this_voice_thing.engines import rvc
 
 
@@ -71,6 +72,19 @@ class RVCPrototypeFacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly 4"):
             prototype.process_pcm(b"\x00\x00" * 3)
 
+    def test_reset_stream_state_sends_worker_reset(self):
+        prototype = rvc.RVCPrototype.__new__(rvc.RVCPrototype)
+        prototype.worker = _FakeWorker({"ok": True, "event": "reset"})
+        prototype.sample_rate = 48000
+        prototype.block_frames = 4
+        prototype.block_ms = 0.0833
+        prototype.last_metrics = {}
+
+        reply = prototype.reset_stream_state()
+
+        self.assertEqual(reply["event"], "reset")
+        self.assertEqual(prototype.worker.requests[-1]["cmd"], "reset")
+
     def test_process_pcm_round_trips_worker_audio_and_metrics(self):
         output = np.asarray([100, -100, 200, -200], dtype="<i2").tobytes()
         worker = _FakeWorker(
@@ -114,6 +128,88 @@ def load_worker_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class _FakePrototype:
+    def __init__(self, block_frames=4, sample_rate=48000):
+        self.block_frames = int(block_frames)
+        self.sample_rate = int(sample_rate)
+        self.last_metrics = {}
+        self.blocks = []
+        self.reset_calls = 0
+
+    def process_pcm(self, pcm, **_kwargs):
+        self.blocks.append(bytes(pcm))
+        self.last_metrics = {
+            "deadline_ratio": 0.5 if len(self.blocks) == 1 else 1.25,
+        }
+        return bytes(pcm)
+
+    def reset_stream_state(self):
+        self.reset_calls += 1
+        return {"ok": True, "event": "reset"}
+
+
+class RVCFrameAdapterTests(unittest.TestCase):
+    def test_accumulates_arbitrary_audio_frames_into_exact_blocks(self):
+        prototype = _FakePrototype(block_frames=4)
+        adapter = rvc.RVCFrameAdapter(prototype)
+
+        first = adapter.process_frame(
+            AudioFrame(pcm=b"\x01\x00" * 2, sample_rate=48000)
+        )
+        second = adapter.process_frame(
+            AudioFrame(pcm=b"\x02\x00" * 6, sample_rate=48000)
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(len(second), 2)
+        self.assertEqual(prototype.blocks[0], b"\x01\x00" * 2 + b"\x02\x00" * 2)
+        self.assertEqual(prototype.blocks[1], b"\x02\x00" * 4)
+        self.assertTrue(all(frame.provenance == "rvc-neural-conversion" for frame in second))
+        self.assertEqual(adapter.metrics()["deadline_misses"], 1)
+
+    def test_discontinuity_discards_pending_input_and_resets_worker_state(self):
+        prototype = _FakePrototype(block_frames=4)
+        adapter = rvc.RVCFrameAdapter(prototype)
+
+        adapter.process_frame(
+            AudioFrame(pcm=b"\x01\x00" * 3, sample_rate=48000)
+        )
+        output = adapter.process_frame(
+            AudioFrame(
+                pcm=b"\x02\x00" * 4,
+                sample_rate=48000,
+                discontinuity=True,
+            )
+        )
+
+        self.assertEqual(prototype.reset_calls, 1)
+        self.assertEqual(prototype.blocks, [b"\x02\x00" * 4])
+        self.assertEqual(len(output), 1)
+        self.assertTrue(output[0].discontinuity)
+        self.assertEqual(adapter.metrics()["discontinuities"], 1)
+
+    def test_rejects_incompatible_frame_contract(self):
+        prototype = _FakePrototype(block_frames=4)
+        adapter = rvc.RVCFrameAdapter(prototype)
+
+        with self.assertRaisesRegex(ValueError, "mono"):
+            adapter.process_frame(
+                AudioFrame(pcm=b"\x00\x00" * 8, sample_rate=48000, channels=2)
+            )
+        with self.assertRaisesRegex(ValueError, "48000"):
+            adapter.process_frame(
+                AudioFrame(pcm=b"\x00\x00" * 4, sample_rate=44100)
+            )
+        with self.assertRaisesRegex(ValueError, "signed-16"):
+            adapter.process_frame(
+                AudioFrame(
+                    pcm=b"\x00\x00" * 4,
+                    sample_rate=48000,
+                    sample_format="f32le",
+                )
+            )
 
 
 class RVCWorkerProtocolTests(unittest.TestCase):

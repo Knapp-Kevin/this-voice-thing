@@ -20,6 +20,10 @@ on:
       - "tests/test_microphone_audio.py"
       - "tests/test_soundboard.py"
       - "tests/test_global_hotkeys.py"
+      - "tests/test_rvc_prototype.py"
+      - "this_voice_thing/engines/rvc.py"
+      - "engines/rvc/rvc_worker.py"
+      - "scripts/benchmark_rvc.py"
       - ".github/workflows/live-voice-ci.yml"
   push:
     branches:
@@ -33,11 +37,16 @@ on:
       - "this_voice_thing/ui/live_capture.py"
       - "this_voice_thing/ui/global_hotkeys.py"
       - "tests/test_live_audio.py"
+      - "tests/test_live_capture.py"
       - "tests/test_live_routes.py"
       - "tests/test_live_voice.py"
       - "tests/test_microphone_audio.py"
       - "tests/test_soundboard.py"
       - "tests/test_global_hotkeys.py"
+      - "tests/test_rvc_prototype.py"
+      - "this_voice_thing/engines/rvc.py"
+      - "engines/rvc/rvc_worker.py"
+      - "scripts/benchmark_rvc.py"
       - ".github/workflows/live-voice-ci.yml"
 
 permissions:
@@ -47,6 +56,7 @@ concurrency:
   group: live-voice-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# RVC CI validates the lightweight protocol/facade only; CUDA/model install is target-machine evidence.
 jobs:
   live-voice-infrastructure:
     name: Live Voice infrastructure (${{ matrix.os }})
@@ -81,14 +91,17 @@ jobs:
         run: >-
           python -m py_compile
           this_voice_thing/core/live_voice.py
-          this_voice_thing/core/microphone_audio.py
           this_voice_thing/core/live_routes.py
+          this_voice_thing/ui/live_capture.py
+          this_voice_thing/core/microphone_audio.py
           this_voice_thing/core/soundboard.py
           this_voice_thing/ui/live_audio.py
-          this_voice_thing/ui/live_capture.py
           this_voice_thing/ui/global_hotkeys.py
           this_voice_thing/ui/pages/live_voice.py
           this_voice_thing/ui/pages/model_loading.py
+          this_voice_thing/engines/rvc.py
+          engines/rvc/rvc_worker.py
+          scripts/benchmark_rvc.py
 
       - name: Run Live Voice infrastructure tests
         env:
@@ -96,9 +109,10 @@ jobs:
         run: >-
           python -m unittest -v
           tests.test_live_audio
-          tests.test_live_capture
           tests.test_live_routes
-          tests.test_live_voice
           tests.test_microphone_audio
+          tests.test_live_capture
+          tests.test_live_voice
+          tests.test_rvc_prototype
           tests.test_soundboard
           tests.test_global_hotkeys

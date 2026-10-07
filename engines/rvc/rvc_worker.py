@@ -13,6 +13,7 @@ Commands:
    "sample_rate":48000,"block_ms":250,"crossfade_ms":50,"extra_ms":2500}
   {"cmd":"process","data":"<base64 s16le>","pitch":0,"formant":0,
    "index_rate":0,"rms_mix":0.5,"threshold":-60,"f0_method":"rmvpe"}
+  {"cmd":"reset"}
   {"cmd":"ping"}
   {"cmd":"shutdown"}
 """
@@ -94,6 +95,21 @@ def float_to_pcm16(values):
     return (
         np.clip(values, -1.0, 1.0) * 32767.0
     ).astype("<i2", copy=False).tobytes()
+
+
+def reset_stream_state(engine):
+    """Clear temporal realtime state without reloading model weights."""
+    engine.input_wav.zero_()
+    engine.input_wav_res.zero_()
+    engine.rms_buffer.fill(0.0)
+    engine.sola_buffer.zero_()
+    if hasattr(engine.rvc, "cache_pitch"):
+        engine.rvc.cache_pitch.zero_()
+    if hasattr(engine.rvc, "cache_pitchf"):
+        engine.rvc.cache_pitchf.zero_()
+    engine.last_pitch = None
+    engine.last_formant = None
+    engine.last_index_rate = None
 
 
 def main():
@@ -237,6 +253,18 @@ def main():
                     vram_allocated_mb=round(vram_allocated_mb, 2) if vram_allocated_mb is not None else None,
                     vram_reserved_mb=round(vram_reserved_mb, 2) if vram_reserved_mb is not None else None,
                     vram_peak_mb=round(vram_peak_mb, 2) if vram_peak_mb is not None else None,
+                )
+
+            elif cmd == "reset":
+                engine = state["engine"]
+                if engine is None:
+                    raise RuntimeError("No RVC model is loaded.")
+                reset_stream_state(engine)
+                reply(
+                    ok=True,
+                    event="reset",
+                    sample_rate=state["sample_rate"],
+                    block_frames=state["block_frames"],
                 )
 
             elif cmd == "ping":

@@ -687,6 +687,17 @@ Optional engines use isolated environments where their dependencies conflict wit
 
 </details>
 
+## Live Voice architecture and research
+
+Live Voice is under active development. The design work is kept in-repo so future implementation does not require archaeological excavation through old chat logs.
+
+- [Live Voice architecture](docs/live-voice-architecture.md)
+- [Live Voice product specification](docs/live-voice-product-spec.md)
+- [Live Voice adversarial review](docs/live-voice-adversarial-review.md)
+- [Advanced integration decisions](docs/live-voice-advanced-integrations.md)
+
+The advanced-integration decision record covers a future branded Windows virtual microphone, Zoom SDK PCM publishing, Discord Social SDK, and true realtime microphone voice conversion. Those are research/roadmap decisions, not claims that those integrations ship in the current main branch.
+
 ## Contributing
 
 Issues and pull requests are welcome for application behavior, installer reliability, UI/UX, model compatibility, documentation and additional engines. See [CONTRIBUTING.md](CONTRIBUTING.md).

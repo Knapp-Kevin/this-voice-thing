@@ -22,6 +22,7 @@ class AudioFrame:
     sample_format: str = "s16le"
     end_of_segment: bool = False
     end_of_utterance: bool = False
+    discontinuity: bool = False
     provenance: str = ""
 
 

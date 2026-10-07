@@ -16,6 +16,10 @@ on:
       - "tests/test_live_voice.py"
       - "tests/test_soundboard.py"
       - "tests/test_global_hotkeys.py"
+      - "tests/test_rvc_prototype.py"
+      - "this_voice_thing/engines/rvc.py"
+      - "engines/rvc/rvc_worker.py"
+      - "scripts/benchmark_rvc.py"
       - ".github/workflows/live-voice-ci.yml"
   push:
     branches:
@@ -80,6 +84,9 @@ jobs:
           this_voice_thing/ui/global_hotkeys.py
           this_voice_thing/ui/pages/live_voice.py
           this_voice_thing/ui/pages/model_loading.py
+          this_voice_thing/engines/rvc.py
+          engines/rvc/rvc_worker.py
+          scripts/benchmark_rvc.py
 
       - name: Run Live Voice infrastructure tests
         env:
@@ -89,5 +96,6 @@ jobs:
           tests.test_live_audio
           tests.test_live_routes
           tests.test_live_voice
+          tests.test_rvc_prototype
           tests.test_soundboard
           tests.test_global_hotkeys

@@ -78,10 +78,14 @@ def is_installed():
         return False
     try:
         manifest = json.loads(INSTALL_MANIFEST.read_text(encoding="utf-8"))
+        source_marker = json.loads(
+            UPSTREAM_SOURCE_MANIFEST.read_text(encoding="utf-8")
+        )
     except Exception:
         return False
     return (
         manifest.get("upstream_commit") == UPSTREAM_COMMIT
+        and source_marker.get("commit") == UPSTREAM_COMMIT
         and manifest.get("python") == PYTHON_VERSION
         and manifest.get("torch") == TORCH_VERSION
     )

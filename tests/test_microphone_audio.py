@@ -159,6 +159,22 @@ class MicrophoneBlockProcessorTests(unittest.TestCase):
         )
         self.assertEqual(processor.metrics()["partial_frame_bytes"], 0)
 
+    def test_discontinuity_clears_partial_frame_and_effect_state(self):
+        processor = MicrophoneBlockProcessor(
+            MicrophoneEffectsConfig(tone=-0.5, limiter_ceiling_db=0.0)
+        )
+        stereo = np.asarray([[1000, 3000]], dtype="<i2").reshape(-1).tobytes()
+
+        self.assertIsNone(
+            processor.process(stereo[:3], sample_rate=48000, channels=2)
+        )
+        self.assertEqual(processor.metrics()["partial_frame_bytes"], 3)
+
+        processor.reset_discontinuity()
+
+        self.assertEqual(processor.metrics()["partial_frame_bytes"], 0)
+        self.assertEqual(processor.metrics()["discontinuities"], 1)
+
     def test_emits_shared_audio_frame_as_mono(self):
         stereo = np.asarray([[1000, 3000], [-1000, -3000]], dtype="<i2").reshape(-1)
         processor = MicrophoneBlockProcessor(

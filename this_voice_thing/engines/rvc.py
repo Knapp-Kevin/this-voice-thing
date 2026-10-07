@@ -336,7 +336,17 @@ class RVCPrototype:
         )
         self.last_metrics = {
             key: reply.get(key)
-            for key in ("inference_ms", "deadline_ms", "deadline_ratio", "samples", "sample_rate")
+            for key in (
+                "inference_ms",
+                "cpu_ms",
+                "deadline_ms",
+                "deadline_ratio",
+                "samples",
+                "sample_rate",
+                "vram_allocated_mb",
+                "vram_reserved_mb",
+                "vram_peak_mb",
+            )
         }
         return base64.b64decode(reply["data"])
 

@@ -60,6 +60,7 @@ def main():
     parser.add_argument("--index", default="", help="Optional matching RVC .index file.")
     parser.add_argument("--input", help="Mono/stereo source WAV/FLAC/etc. for block benchmarking.")
     parser.add_argument("--output", default="rvc_benchmark_output.wav")
+    parser.add_argument("--report", default="", help="Optional JSON file for reproducible benchmark evidence.")
     parser.add_argument("--sample-rate", type=int, default=48000)
     parser.add_argument("--block-ms", type=float, default=250.0)
     parser.add_argument("--crossfade-ms", type=float, default=50.0)
@@ -98,7 +99,11 @@ def main():
         samples = mono_float(args.input, prototype.sample_rate)
         block = prototype.block_frames
         timings = []
+        cpu_times = []
         ratios = []
+        vram_allocated = []
+        vram_reserved = []
+        vram_peak = []
         output = []
         started = time.perf_counter()
 
@@ -119,7 +124,15 @@ def main():
             out = np.frombuffer(converted, dtype="<i2").astype(np.float32) / 32768.0
             output.append(out[:real_length])
             timings.append(float(prototype.last_metrics["inference_ms"]))
+            if prototype.last_metrics.get("cpu_ms") is not None:
+                cpu_times.append(float(prototype.last_metrics["cpu_ms"]))
             ratios.append(float(prototype.last_metrics["deadline_ratio"]))
+            if prototype.last_metrics.get("vram_allocated_mb") is not None:
+                vram_allocated.append(float(prototype.last_metrics["vram_allocated_mb"]))
+            if prototype.last_metrics.get("vram_reserved_mb") is not None:
+                vram_reserved.append(float(prototype.last_metrics["vram_reserved_mb"]))
+            if prototype.last_metrics.get("vram_peak_mb") is not None:
+                vram_peak.append(float(prototype.last_metrics["vram_peak_mb"]))
 
         elapsed = time.perf_counter() - started
         result = np.concatenate(output) if output else np.zeros(0, dtype=np.float32)
@@ -151,6 +164,16 @@ def main():
                 "max": round(max(ratios), 4) if ratios else None,
                 "misses": sum(1 for value in ratios if value > 1.0),
             },
+            "cpu_ms": {
+                "median": round(statistics.median(cpu_times), 3) if cpu_times else None,
+                "p95": round(percentile(cpu_times, 95), 3) if cpu_times else None,
+                "max": round(max(cpu_times), 3) if cpu_times else None,
+            },
+            "vram_mb": {
+                "allocated_max": round(max(vram_allocated), 2) if vram_allocated else None,
+                "reserved_max": round(max(vram_reserved), 2) if vram_reserved else None,
+                "peak_max": round(max(vram_peak), 2) if vram_peak else None,
+            },
             "settings": {
                 "pitch": args.pitch,
                 "formant": args.formant,
@@ -160,7 +183,10 @@ def main():
                 "f0_method": args.f0_method,
             },
         }
-        print(json.dumps(report, indent=2))
+        rendered = json.dumps(report, indent=2)
+        print(rendered)
+        if args.report:
+            Path(args.report).write_text(rendered + "\n", encoding="utf-8")
         return 0 if not report["deadline_ratio"]["misses"] else 2
     finally:
         prototype.close()

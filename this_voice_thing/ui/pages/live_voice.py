@@ -216,7 +216,6 @@ class LiveVoicePage:
         mic_layout.addLayout(mic_input_row)
 
         effects_row = QHBoxLayout()
-        mic_settings = self._live_mic_settings()
         self.live_mic_effects_enabled = QCheckBox("Enable effects")
         self.live_mic_effects_enabled.setChecked(
             bool(mic_settings.get("effects_enabled", True))
@@ -264,18 +263,6 @@ class LiveVoicePage:
         effects_row.addWidget(self.live_mic_status_label)
         mic_layout.addLayout(effects_row)
 
-        self.live_mic_effects_enabled.toggled.connect(
-            self.save_live_mic_effect_settings
-        )
-        self.live_mic_gain.valueChanged.connect(
-            self.save_live_mic_effect_settings
-        )
-        self.live_mic_tone.valueChanged.connect(
-            self.save_live_mic_effect_settings
-        )
-        self.live_mic_compressor.toggled.connect(
-            self.save_live_mic_effect_settings
-        )
         layout.addWidget(mic_card)
 
         speak_card, speak_layout = self._make_card("Live Speak")
@@ -720,14 +707,6 @@ class LiveVoicePage:
     def on_live_mic_effect_setting_changed(self, *_args):
         if not hasattr(self, "live_mic_effects_enabled"):
             return
-        settings = self._live_mic_settings()
-        settings["effects_enabled"] = bool(self.live_mic_effects_enabled.isChecked())
-        settings["gain_db"] = float(self.live_mic_gain.value())
-        settings["tone"] = float(self.live_mic_tone.value())
-        settings["compressor_enabled"] = bool(self.live_mic_compressor.isChecked())
-        self.save_app_settings()
-
-    def save_live_mic_effect_settings(self, *_args):
         settings = self._live_mic_settings()
         settings["effects_enabled"] = bool(self.live_mic_effects_enabled.isChecked())
         settings["gain_db"] = float(self.live_mic_gain.value())

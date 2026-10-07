@@ -29,6 +29,7 @@ class MicrophoneProcessingThread(QThread):
         self.channels = int(channels)
         self.processor = MicrophoneBlockProcessor(effects)
         self._stop = threading.Event()
+        self._last_dropped_bytes = 0
 
     def stop(self):
         self._stop.set()
@@ -42,6 +43,11 @@ class MicrophoneProcessingThread(QThread):
                     if self.ring.closed:
                         break
                     continue
+                ring_stats = self.ring.stats()
+                dropped = int(ring_stats.get("dropped_bytes", 0))
+                if dropped != self._last_dropped_bytes:
+                    self.processor.reset_discontinuity()
+                    self._last_dropped_bytes = dropped
                 frame = self.processor.process(
                     raw,
                     sample_rate=self.sample_rate,

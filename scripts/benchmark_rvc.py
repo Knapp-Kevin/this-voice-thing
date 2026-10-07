@@ -11,15 +11,19 @@ Example:
 """
 
 import argparse
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import platform
 import statistics
 import sys
 import time
 
 import numpy as np
 import soundfile as sf
+from scipy.signal import resample_poly
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -35,16 +39,24 @@ def mono_float(path, target_rate):
         return mono
     if not len(mono):
         return mono
-    target_frames = max(1, int(round(len(mono) * target_rate / source_rate)))
-    source_x = np.linspace(0.0, 1.0, num=len(mono), endpoint=False)
-    target_x = np.linspace(0.0, 1.0, num=target_frames, endpoint=False)
-    return np.interp(target_x, source_x, mono).astype(np.float32)
+    divisor = math.gcd(int(source_rate), int(target_rate))
+    up = int(target_rate) // divisor
+    down = int(source_rate) // divisor
+    return resample_poly(mono, up, down).astype(np.float32, copy=False)
 
 
 def pcm16(values):
     return (
         np.clip(np.asarray(values, dtype=np.float32), -1.0, 1.0) * 32767.0
     ).astype("<i2", copy=False).tobytes()
+
+
+def file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def percentile(values, p):
@@ -58,6 +70,8 @@ def main():
     parser.add_argument("--install", action="store_true", help="Install/repair the pinned RVC prototype runtime.")
     parser.add_argument("--model", help="User-provided RVC .pth target voice model.")
     parser.add_argument("--index", default="", help="Optional matching RVC .index file.")
+    parser.add_argument("--model-source", default="", help="Source/provenance URL or note for the target voice model.")
+    parser.add_argument("--model-license", default="unknown", help="License/provenance label for the target voice model.")
     parser.add_argument("--input", help="Mono/stereo source WAV/FLAC/etc. for block benchmarking.")
     parser.add_argument("--output", default="rvc_benchmark_output.wav")
     parser.add_argument("--report", default="", help="Optional JSON file for reproducible benchmark evidence.")
@@ -139,6 +153,8 @@ def main():
         sf.write(args.output, result, prototype.sample_rate, subtype="PCM_16")
 
         audio_seconds = len(samples) / prototype.sample_rate if prototype.sample_rate else 0.0
+        model_path = str(Path(args.model).expanduser().resolve())
+        index_path = str(Path(args.index).expanduser().resolve()) if args.index else ""
         report = {
             "prototype": {
                 "upstream_commit": rvc.UPSTREAM_COMMIT,
@@ -147,7 +163,22 @@ def main():
                 "block_ms": prototype.block_ms,
                 "load": loaded,
             },
-            "input": str(Path(args.input).resolve()),
+            "machine": {
+                "platform": platform.platform(),
+                "controller_python": platform.python_version(),
+            },
+            "target_model": {
+                "path": model_path,
+                "sha256": file_sha256(model_path),
+                "source": args.model_source or None,
+                "license": args.model_license or "unknown",
+                "index_path": index_path or None,
+                "index_sha256": file_sha256(index_path) if index_path else None,
+            },
+            "input": {
+                "path": str(Path(args.input).resolve()),
+                "sha256": file_sha256(args.input),
+            },
             "output": str(Path(args.output).resolve()),
             "audio_seconds": round(audio_seconds, 4),
             "blocks": len(timings),

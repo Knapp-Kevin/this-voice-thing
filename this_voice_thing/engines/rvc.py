@@ -41,6 +41,7 @@ ROOT = Path(engine_worker.engine_dir(NAME))
 PYTHON = Path(engine_worker.venv_python(NAME))
 WORKER = ROOT / "rvc_worker.py"
 UPSTREAM = ROOT / "upstream"
+UPSTREAM_SOURCE_MANIFEST = UPSTREAM / ".this-voice-thing-source.json"
 INSTALL_MANIFEST = ROOT / "install.json"
 SANITIZED_REQUIREMENTS = ROOT / ".runtime-requirements.txt"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -54,6 +55,7 @@ def required_upstream_files(root=UPSTREAM):
         root / "tools" / "cuda_graph.py",
         root / "RVCRealtimeVST" / "worker" / "rvc_worker.py",
         root / "requirments_cu128_py312.txt",
+        root / ".this-voice-thing-source.json",
     )
 
 
@@ -141,6 +143,18 @@ def _download_pinned_upstream(log=print):
         if UPSTREAM.exists():
             shutil.rmtree(UPSTREAM)
         shutil.move(str(roots[0]), str(UPSTREAM))
+    UPSTREAM_SOURCE_MANIFEST.write_text(
+        json.dumps(
+            {
+                "repository": UPSTREAM_REPO,
+                "commit": UPSTREAM_COMMIT,
+                "archive": UPSTREAM_ARCHIVE,
+            },
+            indent=2,
+        ) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     missing = [str(path) for path in required_upstream_files() if not path.is_file()]
     if missing:
         raise RuntimeError("Pinned RVC source is incomplete: " + ", ".join(missing))
@@ -243,6 +257,7 @@ def install(log=print):
         "prototype": True,
         "upstream_repo": UPSTREAM_REPO,
         "upstream_commit": UPSTREAM_COMMIT,
+        "upstream_code_license": "MIT",
         "asset_repo": ASSET_REPO,
         "asset_revision": asset_revision,
         "python": PYTHON_VERSION,

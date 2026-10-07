@@ -56,6 +56,7 @@ concurrency:
   group: live-voice-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# RVC CI validates the lightweight protocol/facade only; CUDA/model install is target-machine evidence.
 jobs:
   live-voice-infrastructure:
     name: Live Voice infrastructure (${{ matrix.os }})

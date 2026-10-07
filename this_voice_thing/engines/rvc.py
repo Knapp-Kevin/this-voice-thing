@@ -57,10 +57,22 @@ def required_upstream_files(root=UPSTREAM):
     )
 
 
+def required_runtime_assets(root=UPSTREAM):
+    root = Path(root)
+    return (
+        root / "assets" / "hubert_base" / "config.json",
+        root / "assets" / "hubert_base" / "preprocessor_config.json",
+        root / "assets" / "hubert_base" / "pytorch_model.bin",
+        root / "assets" / "rmvpe" / "rmvpe.pt",
+    )
+
+
 def is_installed():
     if not PYTHON.is_file() or not WORKER.is_file() or not INSTALL_MANIFEST.is_file():
         return False
     if not all(path.is_file() for path in required_upstream_files()):
+        return False
+    if not all(path.is_file() for path in required_runtime_assets()):
         return False
     try:
         manifest = json.loads(INSTALL_MANIFEST.read_text(encoding="utf-8"))
@@ -289,6 +301,7 @@ class RVCPrototype:
         self.sample_rate = int(info["sample_rate"])
         self.block_frames = int(info["block_frames"])
         self.block_ms = float(info["block_ms"])
+        self.worker.device = str(info.get("device") or self.worker.device)
         return info
 
     def process_pcm(

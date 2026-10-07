@@ -224,7 +224,6 @@ class MicrophoneBlockProcessor:
         self.output_bytes = 0
         self.discontinuities = 0
         self._remainder = b""
-        self._remainder = b""
 
     def reset_discontinuity(self):
         """Reset state that must not bridge across deliberately dropped audio."""

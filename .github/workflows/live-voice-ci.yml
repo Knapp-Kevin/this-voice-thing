@@ -14,6 +14,7 @@ on:
       - "this_voice_thing/ui/pages/live_voice.py"
       - "this_voice_thing/ui/pages/model_loading.py"
       - "tests/test_live_audio.py"
+      - "tests/test_live_capture.py"
       - "tests/test_live_routes.py"
       - "tests/test_live_voice.py"
       - "tests/test_microphone_audio.py"
@@ -95,6 +96,7 @@ jobs:
         run: >-
           python -m unittest -v
           tests.test_live_audio
+          tests.test_live_capture
           tests.test_live_routes
           tests.test_live_voice
           tests.test_microphone_audio

@@ -85,6 +85,13 @@ The benchmark requires a user-supplied:
 The RVC source license does not determine the license of arbitrary trained
 target models. Record model/weight provenance separately before redistribution.
 
+For a benchmark-only fallback when no user-owned model is available, issue #29
+records `licyk/rvc-model` as the preferred source because its model card says
+its demo voices are copied unchanged from the official RVC distributions and
+it provides provenance metadata. Treat those demo voices as research benchmark
+fixtures, not bundled/product voices.
+
+
 ## Install
 
 From the repo root:
@@ -113,6 +120,8 @@ Use a clean spoken source clip, not music:
 .venv\Scripts\python.exe scripts\benchmark_rvc.py ^
   --model C:\voices\target.pth ^
   --index C:\voices\target.index ^
+  --model-source "your model source / provenance URL" ^
+  --model-license "your model license" ^
   --input C:\clips\speech.wav ^
   --output C:\clips\converted.wav ^
   --report C:\clips\rvc-benchmark.json
@@ -128,6 +137,8 @@ The benchmark reports:
 - model load/prewarm timing;
 - worker CPU-time distribution;
 - Torch VRAM allocated/reserved/peak values when CUDA is active;
+- target model/index SHA-256 plus declared source/license;
+- input clip SHA-256;
 - exact upstream revision and settings.
 
 The JSON report is intended to be attached to issue #29 as the benchmark evidence record. GPU utilization percentage is still a target-machine observation (for example via Task Manager or `nvidia-smi`) because polling it inside every inference block would distort the timing being measured.

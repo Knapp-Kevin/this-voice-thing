@@ -22,6 +22,35 @@ soundfile>=0.13,<1
         self.assertIn("numpy>=1.26,<2", result)
         self.assertIn("soundfile>=0.13,<1", result)
 
+    def test_requirements_reject_unapproved_package_sources(self):
+        unsafe_lines = [
+            "--find-links https://packages.example/wheels",
+            "--trusted-host packages.example",
+            "--no-index",
+            "-r nested-requirements.txt",
+            "--requirement nested-requirements.txt",
+            "-c constraints.txt",
+            "-e git+https://example.com/project.git",
+            "git+https://example.com/project.git",
+            "sample @ https://example.com/sample.whl",
+            "https://example.com/sample.whl",
+        ]
+        for line in unsafe_lines:
+            with self.subTest(line=line):
+                with self.assertRaisesRegex(ValueError, "line 2"):
+                    rvc.sanitize_requirements("numpy==1.26.0\\n" + line + "\\n")
+
+    def test_requirements_preserve_constraints_comments_and_strip_indexes(self):
+        content = (
+            "--index-url=https://mirror.example/simple\\n"
+            "-i https://another.example/simple\\n"
+            "--extra-index-url https://extra.example/simple\\n"
+            "numpy>=1.26,<2  # numeric support\\n"
+            "soundfile==0.13.1\\n"
+        )
+        sanitized = rvc.sanitize_requirements(content)
+        self.assertEqual(sanitized, "numpy>=1.26,<2  # numeric support\\nsoundfile==0.13.1\\n")
+
     def test_install_commands_pin_python_torch_and_upstream_revision(self):
         commands = [command for command, _cwd in rvc.install_commands("uv", "git")]
         flattened = [" ".join(command) for command in commands]

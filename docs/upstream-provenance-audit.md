@@ -43,3 +43,38 @@ Audited: 2026-10-09. Scope: the `main` branch file trees of `Knapp-Kevin/this-vo
 **Current disposition:** independent product branding is appropriate; **upstream attribution remains required** on present evidence. Do not characterize this repository as a clean-room rewrite, remove the original MIT notice, or claim a verified replacement percentage.
 
 **Out of scope for this documentation-only audit:** runtime refactoring, model downloads, hardware tests, GitHub fork detachment, relicensing, and deletion of legacy user data.
+
+## Follow-up function-level audit (2026-10-09)
+
+### Verified surviving executable paths
+
+This audit compared upstream `main.py` with present application components by function/class names and inspected the implementation call sites. **This is evidence of retained adapted code, not a quantitative copyright allocation.**
+
+| Upstream implementation | Current implementation | Runtime evidence | Assessment |
+| --- | --- | --- | --- |
+| `model_backends.py` entire implementation | `this_voice_thing/engines/chatterbox_backend.py` | Identical Git blob; imported through `ui/common.py` and its `load_chatterbox_model` alias | **Exact upstream code, in active model-load path** |
+| `main.py::ModelLoaderThread` | `ui/threads.py::ModelLoaderThread` | Shared initializer and CUDA fallback logic; `ui/pages/model_loading.py` constructs the worker | **Adapted upstream code, actively used** |
+| `main.py::AudioGeneratorThread` | `ui/threads.py::AudioGeneratorThread` | Retains `stop`, `set_seed_internal`, `run` entry points; `ui/pages/generation.py` imports and uses it | **Adapted upstream generation code; active** |
+| `main.py` console/config helper functions | `ui/common.py` | `patched_torch_load`, `configure_console_stream`, `safe_console_text`, `TeeStream`, `read_models_config_payload`, `load_models_config`, `read_json_payload`, `write_json_payload` survive by name and structure | **Relocated upstream-derived logic; individual call-site necessity requires detailed tests before deletion** |
+| `main.py::ChatterboxApp` | `ui/main_window.py::ChatterboxApp` | Same class identity; `_init_ui`, settings, logging, window methods persist, alongside substantial redesign | **Evolved/partly adapted UI, not clean-room replacement** |
+| Original `main.py` | New 221-byte `main.py` delegating to `this_voice_thing.app.main` | Entry point is replaced, but implementation is relocated into current package | **Entry-point rewrite alone has no implications for upstream-code removal** |
+
+### Product identity versus implementation provenance
+
+**Product conclusion:** This Voice Thing is a distinct, much broader voice workbench with independently expanded capabilities. It need not be described in prominent marketing copy as a Chatterbox UI edition or continuation.
+
+**Code conclusion:** The application still uses identifiable upstream Chatterbox UI implementation, not merely Chatterbox **TTS model** code. The current dependency and model-loading paths depend on the copied/adapted material. Therefore it is **not justified** to assert that none of the original UI code is beneficial or retained. Keep original MIT copyright and permission notices in the distribution.
+
+### Safe cleanup classification
+
+- **Remove/promote out of prominent product copy:** legacy fork-centered branding. Already addressed by the independent-product README work.
+- **Retain:** Chatterbox engine/backend, legacy compatibility output directory, settings migration paths, MIT notice, accurate upstream attribution in Acknowledgements.
+- **Refactor only with behavior tests:** `ChatterboxApp` class name, `ModelLoaderThread`, `AudioGeneratorThread`, `ui/common.py` bootstrap helpers, launcher and installer legacy implementation. Renaming alone will not eliminate derivation or legal attribution.
+- **Potentially remove after reference check:** the archived upstream screenshot and redundant history-oriented narrative; neither should be used as evidence that active upstream code is gone.
+- **Do not detach as a substitute for attribution:** GitHub fork-network detachment changes hosting metadata, not code origins or obligations.
+
+### Criteria for a future reduced-provenance claim
+
+To assert that original UI runtime code is no longer used, demonstrate all of the following: (1) exact backend replacement or removal, (2) replaced/adjudicated upstream worker and helper functions, (3) comparable full application behavior in automated and local tests, (4) provenance review of startup scripts and UI methods, and (5) preservation of all remaining applicable notices. Even complete rewriting does not transfer third-party authorship or change the licenses of engine dependencies/model weights.
+
+**Audit disposition:** Retain MIT and upstream notices. Distinct product branding is supported. No code deletion or fork detachment is justified merely by codebase growth.

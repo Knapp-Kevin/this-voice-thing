@@ -182,3 +182,119 @@ class LiveAudioOutputFloatTests(unittest.TestCase):
         np.testing.assert_allclose(samples[:4], [0.5, 0.5, -0.5, -0.5], atol=1e-4)
         self.assertEqual(output._bytes_per_second(), 48000 * 2 * 4)
         output.stop()
+
+
+class _ResidueSink(_FakeSink):
+    """A drained Windows sink: Idle, yet a few ms never reported free."""
+
+    def __init__(self, device, fmt, parent):
+        super().__init__(device, fmt, parent)
+        self._state = None
+
+    def state(self):
+        from PySide6.QtMultimedia import QAudio
+        return self._state if self._state is not None else QAudio.State.IdleState
+
+    def bytesFree(self):
+        return max(0, self._buffer_size - 1056)  # ~2.7 ms of 48 kHz stereo float
+
+
+class LiveAudioOutputDrainTests(unittest.TestCase):
+    def _output(self):
+        output = LiveAudioOutput()
+        with patch("this_voice_thing.ui.live_audio.QAudioSink", _ResidueSink):
+            output.configure(_NegotiatingDevice({(48000, 2)}), 48000)
+        output._started = True
+        return output
+
+    def test_drained_sink_with_residue_is_not_playing(self):
+        output = self._output()
+        output._input_finished = True
+        self.assertGreater(output.buffered_ms(), 1.0)
+        self.assertFalse(output.is_playing())
+        output.stop()
+
+    def test_active_sink_is_playing(self):
+        from PySide6.QtMultimedia import QAudio
+        output = self._output()
+        output._input_finished = True
+        output._sink._state = QAudio.State.ActiveState
+        self.assertTrue(output.is_playing())
+        output.stop()
+
+    def test_mid_stream_underrun_still_counts_as_playing(self):
+        output = self._output()
+        output._input_finished = False  # generation still feeding
+        self.assertTrue(output.is_playing())
+        output.stop()
+
+
+class _FastSession:
+    """A source far faster than real time: 40 s of audio in four 10 s frames."""
+
+    delivery_mode = "segmented"
+    sample_rate = 24000
+    provenance = "test"
+
+    def frames(self, cancelled=lambda: False):
+        from this_voice_thing.core.live_voice import AudioFrame
+        for _ in range(4):
+            if cancelled():
+                return
+            yield AudioFrame(pcm=b"\x00\x00" * self.sample_rate * 10, sample_rate=self.sample_rate)
+
+    def metrics(self):
+        return {"generation_seconds": 5.0, "audio_seconds": 40.0, "rtf": 0.125}
+
+
+class LiveSpeechBackpressureTests(unittest.TestCase):
+    """Regression: a fast source used to outrun playback, hit the 30 s pending cap and
+    abort long utterances after about a second of audio."""
+
+    def test_waits_while_output_is_far_ahead_and_resumes(self):
+        import threading
+        from this_voice_thing.ui.live_audio import LiveSpeechThread
+        thread = LiveSpeechThread(_FastSession())
+        thread.output_buffered_seconds = 20.0
+        done = threading.Event()
+        threading.Thread(target=lambda: (thread.wait_for_room(), done.set()), daemon=True).start()
+        self.assertFalse(done.wait(0.15))      # held back
+        thread.output_buffered_seconds = 2.0   # playback caught up
+        self.assertTrue(done.wait(1.0))
+
+    def test_stop_releases_a_waiting_generator(self):
+        import threading
+        from this_voice_thing.ui.live_audio import LiveSpeechThread
+        thread = LiveSpeechThread(_FastSession())
+        thread.output_buffered_seconds = 20.0
+        done = threading.Event()
+        threading.Thread(target=lambda: (thread.wait_for_room(), done.set()), daemon=True).start()
+        thread.stop()
+        self.assertTrue(done.wait(1.0))
+
+    def test_fast_source_never_gets_more_than_the_limit_ahead(self):
+        import threading
+        from this_voice_thing.ui.live_audio import LiveSpeechThread
+        thread = LiveSpeechThread(_FastSession())
+        emitted, results = [], []
+        thread.frame_ready.connect(lambda frame: emitted.append(len(frame.pcm)), Qt_direct())
+        thread.session_complete.connect(results.append, Qt_direct())
+        runner = threading.Thread(target=thread.run, daemon=True)
+        runner.start()
+        runner.join(0.5)
+        # Nothing drains the "output": after the first frames it must hold back.
+        ahead = sum(emitted) / (24000 * 2)
+        self.assertLessEqual(ahead, LiveSpeechThread.MAX_AHEAD_SECONDS + 10.0)
+        self.assertTrue(runner.is_alive())
+        thread.output_buffered_seconds = 0.0  # playback "drains"; let it finish
+        while runner.is_alive():
+            thread.output_buffered_seconds = 0.0
+            runner.join(0.05)
+        self.assertEqual(sum(emitted) / (24000 * 2), 40.0)
+        self.assertIn("backpressure_seconds", results[0])
+        self.assertLess(results[0]["generation_seconds"], 5.0)
+
+
+def Qt_direct():
+    from PySide6.QtCore import Qt
+    return Qt.ConnectionType.DirectConnection

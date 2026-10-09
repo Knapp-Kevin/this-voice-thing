@@ -14,13 +14,29 @@ class LiveSpeechThread(QThread):
     session_complete = Signal(object)
     error_occurred = Signal(str)
 
+    # Backpressure: pause generation while the output already holds this much audio.
+    # Faster-than-real-time sources (Kokoro, cached pads, audio clips) would otherwise
+    # outrun playback and hit the output's pending-audio cap, aborting long speech.
+    MAX_AHEAD_SECONDS = 8.0
+
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self.session = session
         self._stop = threading.Event()
+        # Updated from the UI thread (LiveAudioOutput.buffer_changed); a float
+        # assignment, so it needs no lock.
+        self.output_buffered_seconds = 0.0
+        self.backpressure_seconds = 0.0
 
     def stop(self):
         self._stop.set()
+
+    def wait_for_room(self):
+        """Block while the output is MAX_AHEAD_SECONDS ahead; returns seconds waited."""
+        started = time.monotonic()
+        while not self._stop.is_set() and self.output_buffered_seconds > self.MAX_AHEAD_SECONDS:
+            self._stop.wait(0.02)
+        return time.monotonic() - started
 
     def run(self):
         try:
@@ -32,8 +48,23 @@ class LiveSpeechThread(QThread):
             for frame in self.session.frames(self._stop.is_set):
                 if self._stop.is_set():
                     break
+                self.backpressure_seconds += self.wait_for_room()
+                if self._stop.is_set():
+                    break
                 self.frame_ready.emit(frame)
-            self.session_complete.emit(self.session.metrics())
+                # Count the frame as buffered until the UI thread reports the real level.
+                self.output_buffered_seconds += len(frame.pcm) / float(
+                    max(1, frame.sample_rate) * 2 * max(1, frame.channels))
+            metrics = dict(self.session.metrics())
+            if self.backpressure_seconds > 0.0:
+                # Waiting for playback isn't generation time: keep TTFA/RTF honest.
+                metrics["backpressure_seconds"] = round(self.backpressure_seconds, 4)
+                if metrics.get("generation_seconds") is not None:
+                    generation = max(0.0, float(metrics["generation_seconds"]) - self.backpressure_seconds)
+                    metrics["generation_seconds"] = round(generation, 4)
+                    if metrics.get("audio_seconds"):
+                        metrics["rtf"] = round(generation / float(metrics["audio_seconds"]), 4)
+            self.session_complete.emit(metrics)
         except Exception as exc:
             self.error_occurred.emit(f"{type(exc).__name__}: {exc}")
 
@@ -94,7 +125,9 @@ class LiveAudioOutput(QObject):
 
     START_BUFFER_SECONDS = 0.15
     SINK_BUFFER_SECONDS = 0.50
-    MAX_PENDING_SECONDS = 30.0
+    # Safety cap. Generation is held to LiveSpeechThread.MAX_AHEAD_SECONDS ahead, so this
+    # only has to fit that plus the longest single segment (Kokoro: ~400 characters).
+    MAX_PENDING_SECONDS = 60.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -289,7 +322,9 @@ class LiveAudioOutput(QObject):
             self._pending.extend(self._to_sink(converted))
         bps = self._bytes_per_second()
         if bps and len(self._pending) > int(bps * self.MAX_PENDING_SECONDS):
-            raise RuntimeError("Live audio buffer exceeded 30 seconds; stopping instead of growing without bound.")
+            raise RuntimeError(
+                f"Live audio buffer exceeded {self.MAX_PENDING_SECONDS:.0f} seconds; "
+                "stopping instead of growing without bound.")
         if not self._started and (
             len(self._pending) >= int(bps * self._start_buffer_seconds)
         ):
@@ -367,7 +402,15 @@ class LiveAudioOutput(QObject):
             return True
         if self._sink is None or not self._started:
             return False
-        return self._sink.state() == QAudio.State.ActiveState or self.buffered_ms() > 1.0
+        state = self._sink.state()
+        if state == QAudio.State.ActiveState:
+            return True
+        if self._input_finished and state in (QAudio.State.IdleState, QAudio.State.StoppedState):
+            # Drained. Windows float sinks can keep a few ms reported as in use
+            # (bufferSize - bytesFree) forever, which used to leave this True after
+            # every utterance and block Mic Effects, busy policies and device changes.
+            return False
+        return self.buffered_ms() > 1.0
 
     def stats(self):
         now = time.monotonic()

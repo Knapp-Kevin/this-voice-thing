@@ -1157,7 +1157,7 @@ class LiveVoicePage:
             return False
         self.live_voice_queue.append(item)
         self._refresh_live_queue()
-        self.live_stop_all_requested = False
+        self.live_voice_stop_all_requested = False
         return True
 
     def live_route_problem(self):
@@ -1446,6 +1446,8 @@ class LiveVoicePage:
                     self.refresh_soundboard()
                 except Exception as exc:
                     self.soundboard_status_label.setText(f"Could not cache pad: {exc}")
+        if self.live_voice_last_error:
+            return  # keep the error visible instead of replacing it with TTFA/RTF
         ttfa = metrics.get("ttfa_seconds")
         rtf = metrics.get("rtf")
         details = []
@@ -2527,7 +2529,12 @@ class LiveVoicePage:
         return audible or mic_active
 
     def on_live_buffer_changed(self, milliseconds):
-        audible = self._refresh_live_stop_buttons() or milliseconds > 1.0
+        if self.live_speech_thread is not None:
+            # Backpressure for the generator (see LiveSpeechThread.MAX_AHEAD_SECONDS).
+            self.live_speech_thread.output_buffered_seconds = float(milliseconds) / 1000.0
+        # Playing state, not raw milliseconds: a drained Windows sink can report a few ms
+        # forever, which kept "Speaking · 0.01s buffered" on screen after playback ended.
+        audible = self._refresh_live_stop_buttons()
         if audible:
             if hasattr(self, "live_mic_input") and self.live_mic_input.is_active():
                 self.live_status_label.setText(

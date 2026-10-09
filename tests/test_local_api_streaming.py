@@ -1,5 +1,7 @@
 import http.client
 import json
+import os
+import tempfile
 import unittest
 
 from this_voice_thing.integrations.local_api import LocalApiServer

@@ -8,7 +8,7 @@
 
 **This Voice Thing** is a Windows-first, local-first desktop app for working with voice AI models.
 
-It started as a fork of [AcTePuKc/Chatterbox-TTS-UI](https://github.com/AcTePuKc/Chatterbox-TTS-UI), which itself provides a UI around Resemble AI's open-source [Chatterbox TTS](https://github.com/resemble-ai/chatterbox). Then we kept building things into it. And building. And building. At some point it stopped being particularly reasonable to keep calling the whole application “Chatterbox UI.”
+It supports [Resemble AI's Chatterbox TTS](https://github.com/resemble-ai/chatterbox) alongside several other speech engines. Today it is a multi-engine voice workbench rather than a UI for any single model. Historical project lineage and upstream license notices are preserved in [Acknowledgements](#acknowledgements) and [LICENSE](LICENSE).
 
 So this is **This Voice Thing**.
 
@@ -30,7 +30,7 @@ Transcription (audio to text) runs locally too, with OpenAI's open [Whisper larg
 Text, recordings, generated audio, saved voices and model configuration stay on your machine unless you explicitly use a feature that talks to an external service, such as Hugging Face discovery/downloads or Google Docs import.
 
 > [!NOTE]
-> The repository was renamed from `Knapp-Kevin/Chatterbox-TTS-UI` to `Knapp-Kevin/this-voice-thing`; GitHub redirects the old URLs, so existing clones keep working. Chatterbox is one of the supported engines and the project this fork grew from. Runtime folders such as `chatterbox_outputs/` keep their names so existing files and scripts aren't stranded.
+> **Compatibility note:** Existing runtime folders such as `chatterbox_outputs/` retain their historical names to avoid breaking saved files and scripts. They do not indicate that the app is limited to Chatterbox.
 
 See [CHANGELOG.md](CHANGELOG.md) for the long version of how this got out of hand.
 
@@ -242,7 +242,7 @@ Windows remains the primary maintained path. Installer decisions are written to 
 
 ## How This Got Out of Hand
 
-The original Chatterbox UI remains the project's foundation and deserves explicit credit. This fork has simply grown far beyond being a UI for one model.
+This Voice Thing has evolved into a multi-engine local voice workbench with its own application architecture and workflows. Its earlier Chatterbox UI origins are credited in [Acknowledgements](#acknowledgements).
 
 Current additions include:
 
@@ -605,7 +605,7 @@ Please keep model licensing, attribution, local/private behavior and compatibili
 
 ## Acknowledgements
 
-**This Voice Thing is based on Chatterbox-TTS-UI.** The rename does not erase the project's lineage, upstream work or licenses.
+**Origins and license notices.** This Voice Thing began from Chatterbox-TTS-UI. The present application is substantially expanded and reorganized; preserved MIT notices acknowledge the upstream code lineage without implying the current product remains a single-engine UI.
 
 - **AcTePuKc** for the original [Chatterbox-TTS-UI](https://github.com/AcTePuKc/Chatterbox-TTS-UI) this fork builds on (MIT), and [lowkeytea](https://github.com/lowkeytea) for [their contributions](https://github.com/AcTePuKc/Chatterbox-TTS-UI/commits?author=lowkeytea) to it.
 - **Resemble AI** for [Chatterbox TTS](https://github.com/resemble-ai/chatterbox) (MIT).

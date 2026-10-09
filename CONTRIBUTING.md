@@ -1,6 +1,6 @@
 # Contributing to This Voice Thing
 
-First off, thank you for considering contributing to This Voice Thing (formerly a Chatterbox TTS UI fork)! We appreciate any help, whether it's reporting a bug, suggesting a feature, or submitting code changes.
+First off, thank you for considering contributing to This Voice Thing! We appreciate any help, whether it's reporting a bug, suggesting a feature, or submitting code changes.
 
 This document provides some guidelines to help make the contribution process smooth and effective for everyone.
 
@@ -13,7 +13,7 @@ There are several ways you can contribute:
     *   Steps to reproduce the bug.
     *   What you expected to happen.
     *   What actually happened (including any error messages or console output).
-    *   Your operating system, Python version, and versions of key libraries (especially PyTorch, Chatterbox TTS, PySide6).
+    *   Your operating system, Python version, and versions of key libraries (especially PyTorch, PySide6, and the affected speech engine).
     *   Screenshots can also be very helpful!
 
 *   **Suggesting Enhancements or New Features:** If you have an idea for a new feature or an improvement to an existing one, please open an issue on GitHub. Describe your idea clearly and why you think it would be a valuable addition.

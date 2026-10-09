@@ -34,7 +34,33 @@ Text, recordings, generated audio, saved voices and model configuration stay on 
 
 See [CHANGELOG.md](CHANGELOG.md) for the long version of how this got out of hand.
 
+## System Requirements & Platform Compatibility
+
+**Before installing:** This Voice Thing runs AI speech models on your own computer. Being able to open the desktop app does not guarantee that a particular model will install, use hardware acceleration, or generate audio successfully.
+
+| Platform | Current project status | What to expect |
+| --- | --- | --- |
+| **Windows 10/11 (64-bit)** | **Primary maintained path** | `run.bat` automates setup; NVIDIA CUDA acceleration is supported by the installer, subject to compatible drivers and hardware. |
+| **macOS on Apple Silicon (M1–M4, including M4 MacBooks)** | **Experimental / unverified** | A `run.sh` launcher exists, but macOS has **not been tested by the maintainer**. Metal (MPS) acceleration is unverified; installation may fail or run on CPU. Community test reports are welcome. |
+| **Linux** | **Experimental / unverified** | A `run.sh` launcher exists; dependency and GPU support are not validated to the same standard as Windows. |
+
+**Local requirements and recommendations**
+
+- **Python:** The application environment is pinned to **Python 3.11**. On Windows, a working `python` command and `uv` are needed to bootstrap it. On macOS/Linux, install Python 3.11 and `uv` before running the shell launcher.
+- **Graphics:** An NVIDIA GPU is recommended for the maintained Windows path. Some engines may work on CPU, typically with much slower generation. Apple's M-series GPU is **not yet a verified acceleration target** for this application.
+- **GPU memory:** Requirements vary by engine. The current project guidance ranges from roughly **2 GB VRAM for Kokoro**, **4 GB minimum for Chatterbox**, and **6–10 GB or more** for larger engines. These are estimates, not confirmed compatibility guarantees. See [per-model guidance](#prerequisites).
+- **System RAM:** No tested minimum has been established. More memory may be necessary for larger models and CPU inference; do not treat GPU VRAM figures as RAM requirements.
+- **Storage:** Plan for **multiple gigabytes per model**, plus Python/PyTorch and separate optional-engine environments. Individual configured model downloads are approximately **0.4–5.4 GB** before installation overhead. Available disk space should exceed the chosen model's download size substantially.
+- **Network:** Internet access is needed for initial dependencies and model downloads; downloaded models can generate locally afterward. No cloud API key is required for normal local use.
+- **Optional:** FFmpeg enables additional audio formats and improved pitch/speed processing; a microphone is needed only for recording.
+
+**Have an Apple Silicon Mac (including an M4 MacBook)?** You're welcome to try it and share results, but **macOS has not been tested by the maintainer** and is **not a supported or guaranteed setup**. Potential issues include unavailable or incompatible Python dependencies, failure of the installer to select a working PyTorch build, CPU-only inference instead of Metal/MPS acceleration, model-specific operators that do not run on MPS, slow performance, or failures during model loading and audio generation. A successful app launch alone does not establish engine compatibility.
+
+**Community testing is welcome.** If you try it on macOS, please [open a GitHub issue](https://github.com/Knapp-Kevin/this-voice-thing/issues/new) with your Mac model and chip, macOS version, RAM, Python version, the engine/model tested, installation steps, whether inference used MPS or CPU, whether audio was generated, and relevant error logs (with tokens and private paths removed). Reports of both success and failure are useful. No Mac hardware or maintainer-led Apple testing is currently available; community reports will help establish what actually works.
+
 ## Table of Contents
+
+- [System Requirements & Platform Compatibility](#system-requirements--platform-compatibility)
 
 - [Quick Start](#quick-start)
 - [Screenshots](#screenshots)

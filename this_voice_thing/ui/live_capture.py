@@ -7,6 +7,8 @@ a worker thread normalizes/processes PCM and emits the shared AudioFrame type.
 import threading
 import time
 
+import numpy as np
+
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSource
 
@@ -88,6 +90,7 @@ class LiveAudioInput(QObject):
         self._started_at = None
         self._captured_bytes = 0
         self._last_metrics = {}
+        self._partial = b""
 
     @staticmethod
     def device_key(device):
@@ -97,12 +100,24 @@ class LiveAudioInput(QObject):
             return str(device.description()).encode("utf-8", "replace")
 
     @staticmethod
-    def _make_format(rate, channels):
+    def _make_format(rate, channels, sample_format=QAudioFormat.SampleFormat.Int16):
         fmt = QAudioFormat()
         fmt.setSampleRate(int(rate))
         fmt.setChannelCount(int(channels))
-        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        fmt.setSampleFormat(sample_format)
         return fmt
+
+    def _is_float_input(self):
+        return self._format is not None and self._format.sampleFormat() == QAudioFormat.SampleFormat.Float
+
+    def _to_s16(self, data):
+        """Float32 capture -> s16le for the processing chain, keeping whole samples
+        across reads (Qt can hand back a partial sample)."""
+        data = self._partial + data
+        usable = len(data) - len(data) % 4
+        self._partial = data[usable:]
+        values = np.frombuffer(data[:usable], dtype="<f4")
+        return np.clip(np.rint(values * 32767.0), -32768, 32767).astype("<i2").tobytes()
 
     def _choose_format(self, device):
         preferred = device.preferredFormat()
@@ -118,14 +133,20 @@ class LiveAudioInput(QObject):
             if count in (1, 2) and count not in channels:
                 channels.append(count)
 
-        for rate in rates:
-            for count in channels:
-                fmt = self._make_format(rate, count)
-                if device.isFormatSupported(fmt):
-                    return fmt
+        # Int16 first; then float32, which many Windows microphones require (Qt's
+        # Windows backend accepts only the endpoint's shared-mode format).
+        for sample_format in (QAudioFormat.SampleFormat.Int16, QAudioFormat.SampleFormat.Float):
+            for rate in rates:
+                for count in channels:
+                    fmt = self._make_format(rate, count, sample_format)
+                    if device.isFormatSupported(fmt):
+                        return fmt
+        if (preferred.sampleFormat() in (QAudioFormat.SampleFormat.Int16, QAudioFormat.SampleFormat.Float)
+                and preferred.channelCount() in (1, 2) and device.isFormatSupported(preferred)):
+            return self._make_format(preferred.sampleRate(), preferred.channelCount(), preferred.sampleFormat())
 
         raise RuntimeError(
-            f"{device.description()} does not advertise a compatible mono/stereo Int16 input format."
+            f"{device.description()} does not advertise a compatible mono/stereo Int16 or float input format."
         )
 
     def configure(self, device, effects=None):
@@ -170,9 +191,11 @@ class LiveAudioInput(QObject):
         self._worker.complete.connect(self._on_worker_complete)
         self._worker.start()
 
+        self._partial = b""
         self._source = QAudioSource(self._device, self._format, self)
+        source_bytes_per_second = rate * channels * max(1, int(self._format.bytesPerSample()))
         self._source.setBufferSize(
-            max(4096, int(bytes_per_second * self.SOURCE_BUFFER_SECONDS))
+            max(4096, int(source_bytes_per_second * self.SOURCE_BUFFER_SECONDS))
         )
         self._source.stateChanged.connect(self._on_state_changed)
 
@@ -207,6 +230,10 @@ class LiveAudioInput(QObject):
             if not data:
                 return
             self._captured_bytes += len(data)
+            if self._is_float_input():
+                data = self._to_s16(data)
+                if not data:
+                    return
             self._ring.push(data)
         except Exception as exc:
             self.failed.emit(f"Microphone capture failed: {exc}")

@@ -102,3 +102,83 @@ class LiveAudioOutputLatencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _NegotiatingDevice(_FakeDevice):
+    """A device that, like real Windows endpoints, only accepts some formats."""
+
+    def __init__(self, supported):
+        self.supported = supported  # {(rate, channels), ...}
+
+    def preferredFormat(self):
+        fmt = QAudioFormat()
+        fmt.setSampleRate(48000)
+        fmt.setChannelCount(2)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        return fmt
+
+    def isFormatSupported(self, fmt):
+        return (fmt.sampleRate(), fmt.channelCount()) in self.supported
+
+
+class LiveAudioOutputFormatTests(unittest.TestCase):
+    """configure() on a fresh output must negotiate a real format (regression: an
+    instance attribute named _format shadowed the format-building method, so the
+    first configure() on any real device raised TypeError)."""
+
+    def test_first_configure_negotiates_without_stubs(self):
+        output = LiveAudioOutput()
+        with patch("this_voice_thing.ui.live_audio.QAudioSink", _FakeSink):
+            output.configure(_NegotiatingDevice({(48000, 2)}), 24000)
+        stats = output.stats()
+        self.assertEqual((output._format.sampleRate(), output._format.channelCount()), (48000, 2))
+        self.assertIn("48000", str(stats))
+        output.stop()
+
+    def test_reconfigure_after_stop_still_negotiates(self):
+        output = LiveAudioOutput()
+        device = _NegotiatingDevice({(44100, 1)})
+        with patch("this_voice_thing.ui.live_audio.QAudioSink", _FakeSink):
+            output.configure(device, 44100)
+            output.stop()
+            output.configure(device, 22050)
+        self.assertEqual((output._format.sampleRate(), output._format.channelCount()), (44100, 1))
+        output.stop()
+
+    def test_unsupported_device_reports_clearly(self):
+        output = LiveAudioOutput()
+        with self.assertRaises(RuntimeError):
+            output.configure(_NegotiatingDevice(set()), 24000)
+
+
+class _FloatOnlyDevice(_NegotiatingDevice):
+    """Like Qt's Windows shared-mode endpoints: only the float32 mix format works."""
+
+    def __init__(self):
+        super().__init__(set())
+
+    def isFormatSupported(self, fmt):
+        return (fmt.sampleFormat() == QAudioFormat.SampleFormat.Float
+                and (fmt.sampleRate(), fmt.channelCount()) == (48000, 2))
+
+    def preferredFormat(self):
+        fmt = super().preferredFormat()
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
+        return fmt
+
+
+class LiveAudioOutputFloatTests(unittest.TestCase):
+    def test_float_only_device_gets_float_sink_and_float_samples(self):
+        output = LiveAudioOutput()
+        with patch("this_voice_thing.ui.live_audio.QAudioSink", _FakeSink):
+            output.configure(_FloatOnlyDevice(), 48000)
+            self.assertEqual(output._format.sampleFormat(), QAudioFormat.SampleFormat.Float)
+            self.assertEqual(output.stats()["sample_format"], "f32")
+            self.assertIn("f32", output.route_description())
+            pcm = np.array([16384, -16384, 0, 32767], dtype="<i2").tobytes()
+            output.push(pcm)
+            samples = np.frombuffer(bytes(output._pending), dtype="<f4")
+        # mono -> stereo duplicates; s16 -> float scales by 1/32768
+        np.testing.assert_allclose(samples[:4], [0.5, 0.5, -0.5, -0.5], atol=1e-4)
+        self.assertEqual(output._bytes_per_second(), 48000 * 2 * 4)
+        output.stop()

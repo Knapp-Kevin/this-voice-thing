@@ -75,3 +75,37 @@ class LiveAudioInputConfigurationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FloatOnlyInputDevice(_FakeInputDevice):
+    """Like many Windows microphones under Qt: only the float32 shared-mode format."""
+
+    def isFormatSupported(self, fmt):
+        return (fmt.sampleFormat() == QAudioFormat.SampleFormat.Float
+                and (fmt.sampleRate(), fmt.channelCount()) == (48000, 2))
+
+    def preferredFormat(self):
+        fmt = QAudioFormat()
+        fmt.setSampleRate(48000)
+        fmt.setChannelCount(2)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Float)
+        return fmt
+
+
+class LiveAudioInputFloatTests(unittest.TestCase):
+    def test_float_only_microphone_is_accepted(self):
+        capture = LiveAudioInput()
+        info = capture.configure(_FloatOnlyInputDevice(), MicrophoneEffectsConfig())
+        self.assertEqual((info["sample_rate"], info["channels"]), (48000, 2))
+        self.assertTrue(capture._is_float_input())
+
+    def test_float_capture_converts_to_s16_across_partial_reads(self):
+        import numpy as np
+        capture = LiveAudioInput()
+        capture.configure(_FloatOnlyInputDevice(), MicrophoneEffectsConfig())
+        raw = np.array([0.5, -0.5, 1.0, -1.0], dtype="<f4").tobytes()
+        first = capture._to_s16(raw[:6])   # one and a half samples
+        second = capture._to_s16(raw[6:])
+        values = np.frombuffer(first + second, dtype="<i2")
+        self.assertEqual(list(values), [16384, -16384, 32767, -32767])
+        self.assertEqual(capture._partial, b"")

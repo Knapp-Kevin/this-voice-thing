@@ -128,12 +128,25 @@ class LiveAudioOutput(QObject):
             return str(device.description()).encode("utf-8", "replace")
 
     @staticmethod
-    def _format(rate, channels):
+    def _build_format(rate, channels, sample_format=QAudioFormat.SampleFormat.Int16):
+        # Not "_format": that name is the instance attribute holding the negotiated
+        # format, which shadowed this method and broke configure() on real devices.
         fmt = QAudioFormat()
         fmt.setSampleRate(int(rate))
         fmt.setChannelCount(int(channels))
-        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        fmt.setSampleFormat(sample_format)
         return fmt
+
+    @staticmethod
+    def _bytes_per_second_for(fmt):
+        return int(fmt.sampleRate()) * int(fmt.channelCount()) * max(1, int(fmt.bytesPerSample()))
+
+    def _to_sink(self, pcm):
+        """s16le from the converter -> the sink's sample format (float32 on most
+        Windows shared-mode endpoints, which accept only their float mix format)."""
+        if not pcm or self._format is None or self._format.sampleFormat() != QAudioFormat.SampleFormat.Float:
+            return pcm
+        return (np.frombuffer(pcm, dtype="<i2").astype("<f4") / np.float32(32768.0)).tobytes()
 
     def _choose_format(self, device, source_rate):
         preferred = device.preferredFormat()
@@ -149,13 +162,19 @@ class LiveAudioOutput(QObject):
             count = int(count or 0)
             if count in (1, 2) and count not in channels:
                 channels.append(count)
-        for rate in rates:
-            for count in channels:
-                fmt = self._format(rate, count)
-                if device.isFormatSupported(fmt):
-                    return fmt
+        # Int16 first; then float32, which Qt's Windows backend often requires (it
+        # accepts only the endpoint's shared-mode mix format, typically float stereo).
+        for sample_format in (QAudioFormat.SampleFormat.Int16, QAudioFormat.SampleFormat.Float):
+            for rate in rates:
+                for count in channels:
+                    fmt = self._build_format(rate, count, sample_format)
+                    if device.isFormatSupported(fmt):
+                        return fmt
+        if (preferred.sampleFormat() in (QAudioFormat.SampleFormat.Int16, QAudioFormat.SampleFormat.Float)
+                and preferred.channelCount() in (1, 2) and device.isFormatSupported(preferred)):
+            return self._build_format(preferred.sampleRate(), preferred.channelCount(), preferred.sampleFormat())
         raise RuntimeError(
-            f"{device.description()} does not advertise a compatible mono/stereo Int16 format."
+            f"{device.description()} does not advertise a compatible mono/stereo Int16 or float format."
         )
 
     @staticmethod
@@ -202,12 +221,12 @@ class LiveAudioOutput(QObject):
                 if self._converter is not None:
                     tail = self._converter.convert(b"", final=True)
                     if tail:
-                        self._pending.extend(tail)
+                        self._pending.extend(self._to_sink(tail))
                 self._source_rate = source_rate
                 self._converter = StreamingPcmConverter(
                     source_rate, fmt.sampleRate(), fmt.channelCount()
                 )
-            bytes_per_second = fmt.sampleRate() * fmt.channelCount() * 2
+            bytes_per_second = self._bytes_per_second_for(fmt)
             self._sink.setBufferSize(
                 max(4096, int(bytes_per_second * self._sink_buffer_seconds))
             )
@@ -238,7 +257,7 @@ class LiveAudioOutput(QObject):
         self._underruns = 0
         self._last_state = None
         self._last_stats = {}
-        bytes_per_second = fmt.sampleRate() * fmt.channelCount() * 2
+        bytes_per_second = self._bytes_per_second_for(fmt)
         self._sink.setBufferSize(
             max(4096, int(bytes_per_second * self._sink_buffer_seconds))
         )
@@ -251,7 +270,7 @@ class LiveAudioOutput(QObject):
     def _bytes_per_second(self):
         if self._format is None:
             return 0
-        return self._format.sampleRate() * self._format.channelCount() * 2
+        return self._bytes_per_second_for(self._format)
 
     def _start_sink(self):
         if self._started or self._sink is None:
@@ -267,7 +286,7 @@ class LiveAudioOutput(QObject):
             raise RuntimeError("Live audio output is not configured.")
         converted = self._converter.convert(pcm)
         if converted:
-            self._pending.extend(converted)
+            self._pending.extend(self._to_sink(converted))
         bps = self._bytes_per_second()
         if bps and len(self._pending) > int(bps * self.MAX_PENDING_SECONDS):
             raise RuntimeError("Live audio buffer exceeded 30 seconds; stopping instead of growing without bound.")
@@ -282,7 +301,7 @@ class LiveAudioOutput(QObject):
         if self._converter is not None:
             tail = self._converter.convert(b"", final=True)
             if tail:
-                self._pending.extend(tail)
+                self._pending.extend(self._to_sink(tail))
         self._input_finished = True
         if self._pending and not self._started:
             self._start_sink()
@@ -361,6 +380,7 @@ class LiveAudioOutput(QObject):
             "source_rate": self._source_rate,
             "target_rate": target_rate,
             "channels": channels,
+            "sample_format": self._sample_format_label(),
             "buffered_ms": round(self.buffered_ms(), 2),
             "underruns": int(self._underruns),
             "bytes_written": int(self._bytes_written),
@@ -381,12 +401,17 @@ class LiveAudioOutput(QObject):
     def last_stats(self):
         return dict(self._last_stats or self.stats())
 
+    def _sample_format_label(self):
+        if self._format is None:
+            return None
+        return "f32" if self._format.sampleFormat() == QAudioFormat.SampleFormat.Float else "s16"
+
     def route_description(self):
         if self._format is None:
             return ""
         return (
             f"{self._format.sampleRate()} Hz · "
-            f"{self._format.channelCount()} ch · s16"
+            f"{self._format.channelCount()} ch · {self._sample_format_label()}"
         )
 
     def stop(self):

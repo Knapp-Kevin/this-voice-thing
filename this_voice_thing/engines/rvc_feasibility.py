@@ -53,12 +53,26 @@ def venv_executable(name: str) -> Path:
 
 
 def sanitize_requirements(text: str) -> str:
-    """Strip upstream index directives while preserving package constraints."""
+    """Use the approved package index without silently accepting alternate sources.
+
+    Only index selection directives are removed. Other pip options, nested
+    requirement files, URLs and editable installs are rejected: each could
+    bypass the source policy or conceal additional dependencies.
+    """
     kept = []
-    for raw in str(text or "").splitlines():
+    for line_number, raw in enumerate(str(text or "").splitlines(), 1):
         stripped = raw.strip()
-        if stripped.startswith("--index-url") or stripped.startswith("--extra-index-url"):
+        if not stripped or stripped.startswith("#"):
+            kept.append(raw.rstrip())
             continue
+        option = stripped.split("=", 1)[0].split(None, 1)[0].lower()
+        if option in {"--index-url", "--extra-index-url", "-i"}:
+            continue
+        if stripped.startswith(("-", "http://", "https://", "git+", "svn+", "hg+")) or " @ " in stripped:
+            raise ValueError(
+                f"Unsupported upstream requirement source or pip option on line {line_number}: "
+                f"{stripped[:120]}"
+            )
         kept.append(raw.rstrip())
     return "\n".join(kept).rstrip() + "\n"
 

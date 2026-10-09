@@ -119,7 +119,12 @@ class PerthWatermark:
             if self._watermarker is None:
                 import perth
                 self._watermarker = perth.PerthImplicitWatermarker()
-            return np.asarray(self._watermarker.apply_watermark(wav, sample_rate=sr), dtype=np.float32)
+            import torch
+            # Perth runs its network with autograd on; outside inference mode every call
+            # left ~16 MB per 8 s of audio behind (about 15 MB per Live Voice utterance).
+            with torch.inference_mode():
+                marked = self._watermarker.apply_watermark(wav, sample_rate=sr)
+            return np.asarray(marked, dtype=np.float32)
         except Exception as exc:
             print(f"Perth watermark could not be applied to {engine_name} audio: {exc}")
             return wav

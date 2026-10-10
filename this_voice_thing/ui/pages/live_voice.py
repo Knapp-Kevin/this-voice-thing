@@ -1332,6 +1332,9 @@ class LiveVoicePage:
         thread.session_complete.connect(self.on_live_session_complete)
         thread.error_occurred.connect(self.on_live_speech_error)
         thread.finished.connect(self.on_live_thread_finished)
+        # Parented to the window, so without this every utterance's thread (and its
+        # session) stayed alive for the life of the app: a slow, steady leak.
+        thread.finished.connect(thread.deleteLater)
         self.live_speech_thread = thread
         thread.start()
 

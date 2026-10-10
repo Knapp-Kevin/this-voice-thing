@@ -189,6 +189,9 @@ class LiveAudioInput(QObject):
         self._worker.frame_ready.connect(self.frame_ready.emit)
         self._worker.failed.connect(self._on_worker_failed)
         self._worker.complete.connect(self._on_worker_complete)
+        # Free the finished worker (it's parented to this object); deleting it in stop()
+        # could destroy a thread that is still winding down.
+        self._worker.finished.connect(self._worker.deleteLater)
         self._worker.start()
 
         self._partial = b""

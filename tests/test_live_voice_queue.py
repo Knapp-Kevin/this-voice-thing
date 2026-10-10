@@ -92,3 +92,71 @@ class LiveVoiceQueueAfterStopAllTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveSpeechThreadCleanupTests(unittest.TestCase):
+    """Regression: speech threads were parented to the window and never deleted, so every
+    utterance kept a QThread and its session alive (a steady leak in long sessions)."""
+
+    def test_finished_threads_are_deleted(self):
+        import os
+        import tempfile
+        import time
+        import wave
+
+        from PySide6.QtCore import QCoreApplication, QEvent, QObject
+
+        from this_voice_thing.ui.live_audio import LiveSpeechThread
+
+        from PySide6.QtWidgets import QApplication
+        # A full QApplication: a bare QCoreApplication here would be reused by later
+        # widget tests and crash them.
+        app = QApplication.instance() or QApplication([])
+
+        class QtHost(QObject, _Host):
+            def __init__(self):
+                QObject.__init__(self)
+                _Host.__init__(self)
+
+            def _live_start_next(self):
+                return LiveVoicePage._live_start_next(self)
+
+            def on_live_stream_started(self, meta):
+                pass
+
+            def on_live_frame(self, frame):
+                pass
+
+            def on_live_session_complete(self, metrics):
+                pass
+
+            def on_live_speech_error(self, message):
+                self.error = message
+
+            def on_live_thread_finished(self):
+                self.live_speech_thread = None
+
+        handle, path = tempfile.mkstemp(suffix=".wav")
+        os.close(handle)
+        with wave.open(path, "wb") as clip:
+            clip.setnchannels(1)
+            clip.setsampwidth(2)
+            clip.setframerate(16000)
+            clip.writeframes(b"\x00\x00" * 1600)
+        host = QtHost()
+        try:
+            for _ in range(5):
+                host.live_voice_queue.append({"text": "cached", "cached_path": path,
+                                              "cache_provenance": "test"})
+                host._live_start_next()
+                deadline = time.monotonic() + 5
+                while host.live_speech_thread is not None and time.monotonic() < deadline:
+                    app.processEvents()
+                    time.sleep(0.01)
+            for _ in range(20):
+                app.processEvents()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                time.sleep(0.01)
+            self.assertEqual(host.findChildren(LiveSpeechThread), [])
+        finally:
+            os.remove(path)

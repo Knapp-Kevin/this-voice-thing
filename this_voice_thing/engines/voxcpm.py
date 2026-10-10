@@ -10,8 +10,10 @@ One loaded model serves both modes, so the "voice cloning" and "voice design"
 entries switch instantly once either is loaded.
 """
 
+import base64
 import os
 import tempfile
+import uuid
 
 import numpy as np
 import soundfile as sf
@@ -28,6 +30,19 @@ PACKAGES = [["voxcpm==2.0.3", "torch==2.8.0", "torchaudio==2.8.0"]]
 # paragraph per section keeps delivery steady.
 MAX_SECTION_CHARS = 400
 MODES = {"clone": "Voice cloning", "design": "Voice design"}
+# Diffusion steps for Live Voice native streaming. Generate and the local API keep the
+# model's default (10). On an RTX 5070 Ti, 10 steps stream slightly slower than real
+# time (RTF ~1.05, so playback gaps); 8 and 6 trade some fidelity for headroom.
+DEFAULT_TIMESTEPS = 10
+LIVE_STEP_PRESETS = {
+    "full": (10, "Full quality · 10 steps"),
+    "balanced": (8, "Balanced · 8 steps"),
+    "low_latency": (6, "Low latency · 6 steps"),
+}
+# Live default, promoted 2026-10-10 after target-machine evidence (#13): 6 steps had
+# 0 underruns (RTF ~0.79) where 10 steps gapped (RTF ~1.13), and an owner listening
+# check found it smoother with the voice "about the same". Generate stays at 10.
+DEFAULT_LIVE_PRESET = "low_latency"
 
 # VoxCPM2 detects the language from the text; this list only drives the Language box.
 LANGUAGE_LABELS = {
@@ -53,11 +68,13 @@ class VoxCPMModel:
 
     backend = NAME
 
-    def __init__(self, repo_id, worker, sample_rate, mode):
+    def __init__(self, repo_id, worker, sample_rate, mode, v2=True):
         self.repo_id = repo_id
         self.worker = worker
         self.sr = sample_rate
         self.device = worker.device
+        self.native_streaming = bool(v2)
+        self.last_stream_metrics = {}
         self.supported_languages = dict(LANGUAGE_LABELS)
         self.speakers = []
         self.speaker = None
@@ -69,7 +86,7 @@ class VoxCPMModel:
         self.ref_text = ""   # transcript of the reference clip, for closer cloning
         self.watermark = True
         self.cfg_value = 2.0
-        self.timesteps = 10
+        self.timesteps = DEFAULT_TIMESTEPS
         self._watermark = engine_worker.PerthWatermark()
         self._temp_dir = tempfile.mkdtemp(prefix="voxcpm_tts_")
         self._anchor = None
@@ -92,23 +109,30 @@ class VoxCPMModel:
     def generate(self, text, **kwargs):
         return self.generate_batch([text], **kwargs)[0]
 
+    def _generation_request(self, text, audio_prompt_path=None, cmd="generate", out_path=None, timesteps=None):
+        request = dict(cmd=cmd, text=text, style="",
+                       seed=int(torch.initial_seed() % 2**31),
+                       cfg_value=self.cfg_value,
+                       timesteps=int(timesteps) if timesteps else self.timesteps)
+        if out_path is not None:
+            request["out_path"] = out_path
+        if self.voxcpm_mode == "design":
+            if self._anchor is None:
+                request["style"] = self.instruct.strip()
+            else:
+                request.update(prompt_wav=self._anchor[0], prompt_text=self._anchor[1],
+                               reference_wav=self._anchor[0])
+        else:
+            request.update(reference_wav=audio_prompt_path, style=self.instruct.strip())
+            if self.ref_text.strip() and audio_prompt_path:
+                request.update(prompt_wav=audio_prompt_path, prompt_text=self.ref_text.strip())
+        return request
+
     def generate_batch(self, texts, audio_prompt_path=None, **_ignored):
         results = []
         for text in texts:
             path = os.path.join(self._temp_dir, f"section_{len(os.listdir(self._temp_dir))}.wav")
-            request = dict(cmd="generate", text=text, out_path=path, style="",
-                           seed=int(torch.initial_seed() % 2**31),
-                           cfg_value=self.cfg_value, timesteps=self.timesteps)
-            if self.voxcpm_mode == "design":
-                if self._anchor is None:
-                    request["style"] = self.instruct.strip()
-                else:
-                    request.update(prompt_wav=self._anchor[0], prompt_text=self._anchor[1],
-                                   reference_wav=self._anchor[0])
-            else:
-                request.update(reference_wav=audio_prompt_path, style=self.instruct.strip())
-                if self.ref_text.strip() and audio_prompt_path:
-                    request.update(prompt_wav=audio_prompt_path, prompt_text=self.ref_text.strip())
+            request = self._generation_request(text, audio_prompt_path, out_path=path)
             reply = self.worker.request(**request)
             wav, sr = sf.read(reply["path"], dtype="float32")
             self.sr = sr
@@ -118,6 +142,49 @@ class VoxCPMModel:
                 wav = self._watermark.apply(wav, sr, "VoxCPM")
             results.append(torch.from_numpy(np.ascontiguousarray(wav)).unsqueeze(0))
         return results
+
+    def generate_streaming_pcm(self, text, audio_prompt_path=None, timesteps=None):
+        """Yield model-native mono s16le PCM chunks from VoxCPM2.
+
+        This is intentionally a raw/live path: whole-waveform finishing and the
+        Perth watermark are not applied. The HTTP API advertises that distinction
+        explicitly rather than silently pretending streamed audio is identical to
+        a completed render.
+        """
+        if not self.native_streaming:
+            raise RuntimeError("Native PCM streaming is available only for VoxCPM2.")
+        request = self._generation_request(text, audio_prompt_path, cmd="generate_stream", timesteps=timesteps)
+        self.last_stream_timesteps = request["timesteps"]
+        cancel_path = os.path.join(self._temp_dir, f"cancel_{uuid.uuid4().hex}")
+        request["cancel_path"] = cancel_path
+        self.last_stream_metrics = {}
+        completed = False
+        events = self.worker.request_stream(**request)
+        try:
+            for event in events:
+                kind = event.get("event")
+                if kind == "audio":
+                    yield base64.b64decode(event["data"])
+                elif kind == "done":
+                    completed = True
+                    self.last_stream_metrics = dict(event)
+        finally:
+            if not completed:
+                # The worker cannot read a second stdin command while VoxCPM is inside
+                # generate_streaming(). A same-machine sentinel is enough to request
+                # cancellation at the next yielded native audio chunk.
+                try:
+                    with open(cancel_path, "wb"):
+                        pass
+                except OSError:
+                    pass
+            close = getattr(events, "close", None)
+            if close is not None:
+                close()
+            try:
+                os.remove(cancel_path)
+            except OSError:
+                pass
 
     def close(self):
         self.worker.close()
@@ -134,4 +201,4 @@ def load_voxcpm_model(repo_id, mode="clone", log=print):
     except Exception:
         worker.close()
         raise
-    return VoxCPMModel(repo_id, worker, info.get("sample_rate", 48000), mode)
+    return VoxCPMModel(repo_id, worker, info.get("sample_rate", 48000), mode, info.get("v2", False))

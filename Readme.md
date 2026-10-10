@@ -159,6 +159,7 @@ When the app opens:
 
 Once that works, the rest of the app is safe to explore:
 
+- **Live Voice** speaks typed text directly through a selected audio output, with queue and stop controls.
 - **Studio** creates, clones, remixes and refines voices.
 - **Voices** stores the voices you save.
 - **Transcribe** turns recordings into text.
@@ -179,6 +180,24 @@ You normally should **not**:
 - copy optional-engine packages into the main environment.
 
 Those are troubleshooting or development tasks, not normal use.
+
+### Live Voice route probe
+
+Before involving a TTS model, you can validate Windows/Qt audio routing with a known low-volume PCM tone:
+
+```bat
+.venv\Scripts\python.exe scripts\live_voice_route_probe.py
+```
+
+That lists playback and recording endpoints. To test a route:
+
+```bat
+.venv\Scripts\python.exe scripts\live_voice_route_probe.py --output "CABLE Input" --monitor "YOUR HEADPHONES"
+```
+
+The probe reports the negotiated sink format, bytes written, underruns, configured-to-start time, and a conservative paired-microphone hint when one can be identified. Use it to separate Windows/virtual-cable problems from TTS-model problems.
+
+See [Live Voice QA and performance runbook](docs/live-voice-qa.md) for the full acceptance sequence.
 
 ### Launchers
 
@@ -256,8 +275,9 @@ Current additions include:
 - **Transcription.** Turn audio into text with Whisper, save it as text or subtitles, fill in a voice clip's transcript, or send it back to Generate.
 - **Pronunciation controls and subtitles.** Maintain a pronunciation dictionary and generate SRT or WebVTT from the known generation timeline.
 - **Audio finishing.** Adjust paragraph pauses, even out volume, trim silence, change speed or pitch, and export WAV, FLAC or MP3.
+- **Live Voice and a cached TTS soundboard.** Type a line and send the selected voice directly to speakers, headphones or another Windows audio output without first rendering a file. Save useful phrases as persistent soundboard pads; after the first successful render, static pads play from a local WAV cache without waking the model or GPU.
 - **A local HTTP API.** Use the same engines and voice library from other software through OpenAI-compatible or native endpoints.
-- **A redesigned desktop interface.** Generate, Studio, Voices, Transcribe, Model, Advanced and Log pages with light and dark themes.
+- **A redesigned desktop interface.** Generate, Live Voice, Studio, Voices, Transcribe, Model, Advanced and Log pages with light and dark themes.
 
 In other words, calling the whole thing “Chatterbox UI” eventually became less a name and more a historical anecdote.
 
@@ -272,6 +292,78 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - Variation and take-number controls for repeatable takes where supported.
 - Language selection based on the active model.
 - A built-in player with history, seeking and optional auto-play.
+
+</details>
+
+<details>
+<summary><strong>Live Voice</strong></summary>
+
+**Live Voice** is the direct-to-device speech surface. It uses the same loaded voice, model, language and pronunciation settings as Generate, but sends PCM to a selected audio output instead of waiting for a completed file.
+
+- Type a line and click **Speak**, or press **Ctrl+Enter**.
+- **Mic Effects:** choose a physical microphone and route it directly through the same Local/Discord/Zoom/OBS/virtual-mic outputs without transcribing it. Effects currently include gain, warm/bright tone shaping, and optional compression/limiting; disabling effects is true PCM pass-through.
+- Microphone capture is processed locally in memory and is **not recorded to disk**. External routes still require explicit arming, and local speaker output warns before starting because an open microphone can create feedback.
+- Mic Effects uses a bounded capture buffer and a lower-latency sink policy than TTS. Pitch/formant shifting is intentionally not claimed yet; it needs a realtime-safe implementation rather than reusing the app's offline finishing path.
+- Submit more lines while speech is active; they are queued in order.
+- **Stop current** silences the current utterance immediately and keeps later queued items.
+- **Stop all** discards audible buffered audio and clears the queue.
+- **Repeat last** resubmits the most recent completed line.
+- **Soundboard:** save the composer (or last spoken line) as a named TTS pad. Double-click or Trigger a pad to play it.
+- **Multiple boards:** create, rename, switch and delete soundboard boards without mixing unrelated phrase sets together.
+- **Board defaults:** each board can prefer a saved voice, route, and default trigger policy. External routes remain disarmed when a board is selected, so a saved board cannot silently begin transmitting.
+- **Quick voices:** favorite saved voices for one-click switching from Live Voice without digging through the full voice library.
+- **Audio clip pads:** import local WAV/FLAC/OGG/MP3/AIFF files into the soundboard's owned `soundboard/audio/` storage. Clips use the same routing, monitoring, Stop, hotkey, and queue paths as generated speech and do not require a TTS model.
+- **Pad organization:** favorite pads, add tags, search by name/text/tag, filter to favorites, and move pads up/down without changing their saved identity.
+- **Explicit trigger behavior:** pads can inherit the board default or choose **Queue**, **Interrupt current**, or **Ignore if busy**. Every behavior still respects Live Voice's bounded queue and fail-closed route checks.
+- **Opt-in Windows global hotkeys:** assign modifier-based system-wide shortcuts to pads and Stop All. A visible switch disables all global pad triggers instantly without deleting assignments, while a configured emergency Stop All stays registered; conflicts are reported rather than silently stealing keys.
+- **Page-scoped shortcuts:** while the Live Voice page has focus, **Alt+1…9** triggers the first nine pads, **Ctrl+Alt+1…9** switches among the first nine boards, **Ctrl+.** is emergency Stop All, **Ctrl+Shift+Enter** repeats the last line, and **Ctrl+Shift+Up / Ctrl+Shift+Down** reorders the selected pad. These remain available independently of optional system-wide hotkeys.
+- **Bounded queue:** Live Voice caps outstanding work at 25 items and about 10 minutes of estimated speech so repeated pad presses or automation cannot grow memory without bound.
+- **Editable queue:** select a queued line to remove it or move it up/down before playback. **Delete** removes the selected queued item and **Alt+Up / Alt+Down** reorder it while Live Voice has focus.
+- The active model label exposes a plain-language readiness tooltip: getting ready, ready, or load one to speak.
+- **Session privacy controls:** Live Speak history is session-only, capped, and can be cleared immediately. **Clear cache** removes all locally cached soundboard WAVs while keeping the pads themselves.
+- **Visible provenance:** the Live Voice header shows the selected voice origin and the current audio provenance/watermark policy. Cached pads preserve the provenance of the audio they were originally built from instead of merely saying “cached.”
+- **Copy diagnostics:** copies a privacy-conscious JSON snapshot with model/voice type, TTFA/RTF, route state, source/target sample rates, sink-start latency, bytes written, underruns and queue pressure. Spoken text is intentionally omitted.
+- **Monitoring feedback warning:** when an external route is armed and the monitor device does not look like headphones/headset/earbuds, Live Voice warns that a physical microphone may hear the monitoring output.
+- Static TTS pads are cached locally after their first successful generation. A valid cached pad uses no model/GPU and follows the same device, buffering, Stop and resampling path as live speech.
+- Pad caches are content-addressed against the phrase, saved voice identity/clip revision, model/mode, language, style, synthesis controls and pronunciation rules. If those change, the UI marks the pad **rebuild needed** instead of silently playing stale audio.
+- Deleting a pad garbage-collects cache files that are no longer referenced.
+- Choose a **Route**: **Local output**, **External / virtual microphone**, **Discord**, **Zoom**, **OBS**, or **Other app**. Each profile remembers its own primary output and optional monitor device.
+- External routes start **DISARMED** every time the app launches and must be armed explicitly before Speak or a soundboard pad can transmit to them.
+- Pick any audio output exposed by Windows/Qt, including speakers, headphones and compatible virtual audio-cable playback devices. Common virtual-device names are labeled as likely virtual, but the app does not require a specific vendor.
+- Enable **Also let me hear it through** to monitor the same PCM through a second device such as headphones. The monitor has an independent audio sink: if it fails or disappears, the primary external route continues.
+- **Use as microphone** shows a conservative best-effort match for the recording side of a recognized virtual cable. When a match exists, **Copy microphone name** puts the exact endpoint name on the clipboard.
+- **Setup…** shows app-specific instructions for Discord, Zoom, OBS, or a generic target application.
+- For Discord/Zoom/OBS/Other app profiles, Live Voice inspects the Windows recording endpoints and shows a conservative **Use as microphone** hint when it can identify the paired side of a known virtual cable. The hint can be copied directly.
+- **Setup…** shows app-specific instructions using the currently selected device names. It does not automate or modify third-party application settings.
+- **Test route** speaks a short phrase through the active route using the current voice.
+- A previously saved primary device that disappears is shown as unavailable. Live Voice does **not** silently fall back to the system speakers.
+- The page reports whether the selected item is using **Native streaming**, **Segmented streaming**, **Buffered fallback**, or **Cached** playback.
+- **VoxCPM2 live** quality: **Low latency · 6 steps** (default), **Balanced · 8**, or **Full quality · 10**. This setting applies to Live Voice only; Generate always uses 10 steps. On an RTX 5070 Ti, 10 steps generates slightly slower than real time and leaves gaps, while 6 steps keeps ahead of playback. The status line warns when generation falls behind.
+- VoxCPM2 uses native model streaming. Kokoro uses short segmented generation. Other compatible loaded engines can still speak here after completing the utterance.
+- Live playback has its own bounded audio buffer and converts the model's native sample rate when the selected device requires a different supported rate.
+
+This implementation can now route to a normal local device or an **external/virtual-microphone profile**, with optional independent monitoring. It does not install a virtual microphone driver itself. If you already have a virtual audio cable, choose its **playback/input** side under **Send voice to**, arm the external route, and choose the cable's paired **recording/output** side as the microphone in Discord, Zoom, OBS or another application.
+
+For example, with a typical virtual cable:
+
+1. In **Live Voice → Route**, choose **Discord**, **Zoom**, **OBS**, or **External / virtual microphone**.
+2. Under **Send voice to**, choose the cable's playback endpoint, often named something like **CABLE Input**.
+3. Optionally enable monitoring and choose your headphones.
+4. Click **Arm external route**, then **Test route**.
+5. In Discord/Zoom/etc., choose the paired recording endpoint, often named something like **CABLE Output**, as the microphone.
+
+Exact names depend on the virtual-audio software. This Voice Thing stores the actual Windows/Qt device ID rather than assuming a vendor naming convention. The app-specific profiles include guided Discord/Zoom/OBS/Other App setup and conservative virtual-cable microphone pairing hints. Audio-clip pads, multiple boards, focused shortcuts and opt-in Windows global hotkeys are implemented on the same Live Voice surface.
+
+The desktop Live Voice path does **not** call the local HTTP API. Both surfaces consume the same underlying model streaming capabilities.
+
+Architecture and implementation planning live in:
+
+- [Live Voice architecture](docs/live-voice-architecture.md)
+- [Live Voice product specification](docs/live-voice-product-spec.md)
+- [Live Voice adversarial review](docs/live-voice-adversarial-review.md)
+- [Live Voice app routing guide](docs/live-voice-app-routing.md)
+- [Live Voice QA and performance runbook](docs/live-voice-qa.md)
+- [Live Voice app routing guide](docs/live-voice-app-routing.md)
 
 </details>
 
@@ -405,6 +497,38 @@ curl http://127.0.0.1:8765/v1/audio/transcriptions \
 
 Discovery endpoints: `GET /v1/health`, `GET /v1/models`, `GET /v1/voices`.
 
+### Experimental live PCM streaming
+
+The local API and the desktop Live Voice page share the same live model capabilities.
+
+- **VoxCPM2 · native:** returns acoustic PCM chunks while one utterance is still being generated.
+- **Kokoro · segmented:** generates short speech sections and returns each completed section while later sections continue.
+
+The API remains useful for other programs; the desktop Live Voice page consumes the model stream directly and does not loop back through HTTP.
+
+For VoxCPM2 voice cloning:
+
+```bash
+curl http://127.0.0.1:8765/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"VoxCPM2 voice cloning","input":"Hello while I am still being generated.","voice":"YOUR CLIP VOICE","stream":true,"stream_format":"audio","response_format":"pcm"}' \
+  --no-buffer > speech.pcm
+```
+
+The stream is mono signed 16-bit little-endian PCM at the model's native sample rate (48 kHz for VoxCPM2, 24 kHz for Kokoro). Response headers include `X-Audio-Sample-Rate`, `X-Audio-Sample-Format`, `X-Streaming-Mode` (`native` or `segmented`) and `X-Audio-Watermark`.
+
+Live output intentionally does **not** run whole-waveform finishing such as speed/pitch processing, final global volume levelling or subtitle alignment. VoxCPM2's raw native path also does not currently apply the normal Perth watermark. Kokoro's segmented path retains its existing per-section watermark and the app's clause/sentence/paragraph seam pauses. Streaming currently requires `speed=1.0` and raw PCM output; the API rejects incompatible options rather than silently changing their meaning.
+
+To measure actual latency and sustained throughput on the current machine:
+
+```bash
+python scripts/benchmark_live_api.py --model "VoxCPM2 voice cloning" --voice "YOUR CLIP VOICE"
+```
+
+The benchmark reports time to first audio (TTFA), real-time factor (RTF), and on the cancellation branch how quickly a disconnected stream releases the generation slot. RTF below 1.0 means synthesis stays ahead of playback; lower is better.
+
+The architecture, live-mode definitions, provenance policy, validation gates and planned merge order are documented in [docs/live-tts-architecture.md](docs/live-tts-architecture.md).
+
 </details>
 
 ## Google Docs sign-in setup
@@ -516,11 +640,12 @@ this-voice-thing/
 │  ├─ ui/
 │  │  ├─ main_window.py         the window: sidebar, page layout, settings (run as __main__)
 │  │  ├─ pages/                 one module per page, mixed into the window:
-│  │  │                         generate, generation, documents, estimates, finishing, engine_controls, player,
+│  │  │                         generate, generation, live_voice, documents, estimates, finishing, engine_controls, player,
 │  │  │                         studio, voice, voice_picker, library, voice_use, recording, transcribe, models, discover, model_loading,
 │  │  │                         model_settings, advanced, api_server, pronunciations
 │  │  ├─ dialogs/               recording, find/add models, voices and cast, pronunciation, Google Docs
 │  │  ├─ threads.py             model loading, generation, installs, speech and transcription threads
+│  │  ├─ live_audio.py          QAudioSink streaming playback, buffering and sample-rate conversion
 │  │  ├─ api_bridge.py          hands local API requests to the window
 │  │  ├─ common.py              start-up setup, model config and shared constants
 │  │  ├─ widgets.py             small reusable widgets
@@ -531,6 +656,9 @@ this-voice-thing/
 │  │  ├─ worker.py              shared worker/environment support for the other engines
 │  │  └─ qwen.py, kokoro.py, voxcpm.py, omnivoice.py, vibevoice.py
 │  ├─ core/
+│  │  ├─ live_voice.py          shared live/cached speech sessions and typed PCM AudioFrame
+│  │  ├─ live_routes.py         persistent route profiles and virtual-device hints
+│  │  ├─ soundboard.py          persistent boards/pads and content-addressed local WAV cache
 │  │  ├─ model_registry.py      engines, capabilities, licenses, hardware needs, Hugging Face discovery
 │  │  ├─ documents.py           document loading, sectioning, conversation scripts
 │  │  ├─ audio_effects.py       joining, finishing, speed/pitch, export

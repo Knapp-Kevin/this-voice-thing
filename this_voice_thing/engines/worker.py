@@ -96,6 +96,42 @@ class WorkerProcess:
             raise RuntimeError(reply.get("error", f"{self.tag} request failed."))
         return reply
 
+
+    def request_stream(self, **payload):
+        """Yield JSON-line events for one long-running worker request.
+
+        The worker lock stays held until the terminal done event. If a consumer
+        closes early, unread events are drained before unlocking so the next
+        request cannot mistake stale audio for its own reply. This first
+        streaming slice does not yet cancel model inference in the subprocess.
+        """
+        with self.lock:
+            if self.process.poll() is not None:
+                raise RuntimeError(f"The {self.tag} worker is not running.")
+            self.process.stdin.write(json.dumps(payload) + "\n")
+            self.process.stdin.flush()
+            done = False
+            try:
+                while True:
+                    reply = self._read_reply()
+                    if not reply.get("ok"):
+                        done = True
+                        raise RuntimeError(reply.get("error", f"{self.tag} streaming request failed."))
+                    if reply.get("event") == "done":
+                        done = True
+                    yield reply
+                    if done:
+                        return
+            finally:
+                if not done and self.process.poll() is None:
+                    try:
+                        while True:
+                            reply = self._read_reply()
+                            if not reply.get("ok") or reply.get("event") == "done":
+                                break
+                    except Exception:
+                        pass
+
     def close(self):
         if self.process.poll() is None:
             try:
@@ -119,7 +155,12 @@ class PerthWatermark:
             if self._watermarker is None:
                 import perth
                 self._watermarker = perth.PerthImplicitWatermarker()
-            return np.asarray(self._watermarker.apply_watermark(wav, sample_rate=sr), dtype=np.float32)
+            import torch
+            # Perth runs its network with autograd on; outside inference mode every call
+            # left ~16 MB per 8 s of audio behind (about 15 MB per Live Voice utterance).
+            with torch.inference_mode():
+                marked = self._watermarker.apply_watermark(wav, sample_rate=sr)
+            return np.asarray(marked, dtype=np.float32)
         except Exception as exc:
             print(f"Perth watermark could not be applied to {engine_name} audio: {exc}")
             return wav

@@ -53,24 +53,103 @@ class ApiBridge(QObject):
     def voices(self):
         return self.on_ui(self.app.api_voices)
 
+    def _begin_job(self, request):
+        deadline = time.monotonic() + self.LOAD_TIMEOUT
+        while True:
+            job = self.on_ui(lambda: self.app.api_begin(request))
+            if not job.get("loading"):
+                return job
+            if time.monotonic() > deadline:
+                raise local_api.ApiError(504, "The model took too long to load.", "server_error")
+            time.sleep(0.5)
+
     def synthesize(self, request):
         if not self.job_lock.acquire(timeout=self.LOAD_TIMEOUT):
             raise local_api.ApiError(503, "Another API request is still running.", "server_error")
         try:
-            deadline = time.monotonic() + self.LOAD_TIMEOUT
-            while True:
-                job = self.on_ui(lambda: self.app.api_begin(request))
-                if not job.get("loading"):
-                    break
-                if time.monotonic() > deadline:
-                    raise local_api.ApiError(504, "The model took too long to load.", "server_error")
-                time.sleep(0.5)  # a model is loading for this request
+            job = self._begin_job(request)
             try:
                 return self._generate(job)
             finally:
                 self.on_ui(self.app.api_end)
         finally:
             self.job_lock.release()
+
+    def synthesize_stream(self, request):
+        """Prepare one live synthesis session.
+
+        Native engines may yield acoustic chunks before an utterance completes.
+        Segmented engines yield completed short speech sections while the next
+        section is generated. The GPU/API lock remains held until the returned
+        chunk iterator is exhausted or closed.
+        """
+        if not self.job_lock.acquire(timeout=self.LOAD_TIMEOUT):
+            raise local_api.ApiError(503, "Another API request is still running.", "server_error")
+        job = None
+        try:
+            job = self._begin_job(request)
+            generator = job["generator"]
+            model = generator["model"]
+            spoken_text = generator["text"]
+            pronunciations = job.get("pronunciations")
+            if pronunciations is not None:
+                spoken_text, _count = pronunciations.apply_section(spoken_text)
+
+            native_method = getattr(model, "generate_streaming_pcm", None)
+            segmented_method = getattr(model, "generate_segmented_pcm", None)
+            if callable(native_method) and getattr(model, "native_streaming", False):
+                streaming_mode = "native"
+                watermark = "not-applied-live-path"
+                source = native_method(
+                    spoken_text,
+                    audio_prompt_path=generator.get("audio_prompt_path"),
+                )
+            elif callable(segmented_method) and getattr(model, "segmented_streaming", False):
+                streaming_mode = "segmented"
+                watermark = "applied-per-segment"
+                finishing = generator["finishing"]
+                source = segmented_method(
+                    spoken_text,
+                    language_id=generator.get("language_id"),
+                    paragraph_pause=finishing.paragraph_pause,
+                )
+            else:
+                raise local_api.ApiError(
+                    409,
+                    "The selected model does not support live audio streaming yet. "
+                    "Use VoxCPM2 or Kokoro, or omit stream for normal buffered synthesis.",
+                )
+
+            def chunks():
+                try:
+                    yield from source
+                finally:
+                    close = getattr(source, "close", None)
+                    if close is not None:
+                        close()
+                    try:
+                        self.on_ui(self.app.api_end)
+                    finally:
+                        self.job_lock.release()
+
+            return {
+                "chunks": chunks(),
+                "sample_rate": int(getattr(model, "sr", 48000)),
+                "channels": 1,
+                "sample_format": "s16le",
+                "streaming": streaming_mode,
+                "watermark": watermark,
+                "model": job["model_label"],
+                "voice": job["voice_label"],
+            }
+        except Exception:
+            if job is not None:
+                try:
+                    self.on_ui(self.app.api_end)
+                except Exception:
+                    pass
+            self.job_lock.release()
+            raise
 
     def transcribe(self, audio, filename, language):
         if not transcription.is_downloaded():

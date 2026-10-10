@@ -73,6 +73,7 @@ reference_recordings/
 
 # Voice library: your saved voices and the clips it makes
 voice_library/
+soundboard/
 
 # Pronunciation dictionary (your word list)
 pronunciations.json

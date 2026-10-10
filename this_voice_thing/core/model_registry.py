@@ -235,6 +235,31 @@ def capability_for(entry):
     return "clone"  # Chatterbox clones, or uses its built-in voice with no clip
 
 
+def live_audio_capability(entry):
+    """Stable API-facing live-audio capability declared by a model entry.
+
+    Unknown or user-added models default to no advertised live support until
+    their configuration explicitly declares it. This avoids inferring runtime
+    behavior from a repository name.
+    """
+    value = entry.get("live_audio")
+    if not isinstance(value, dict):
+        return {"audio": "none", "response_format": None, "sample_rate": None}
+    mode = value.get("mode")
+    if mode not in ("native", "segmented"):
+        return {"audio": "none", "response_format": None, "sample_rate": None}
+    sample_rate = value.get("sample_rate")
+    try:
+        sample_rate = int(sample_rate) if sample_rate is not None else None
+    except (TypeError, ValueError):
+        sample_rate = None
+    return {
+        "audio": mode,
+        "response_format": value.get("response_format") or "pcm",
+        "sample_rate": sample_rate,
+    }
+
+
 def group_by_capability(entries):
     """[(capability, title, [entries])] in CAPABILITIES order, skipping empty groups."""
     groups = []

@@ -41,6 +41,9 @@ class Generation:
     def start_generation(self, preview=False):
         if self.is_generating:
             return
+        if getattr(self, "live_voice_busy", False):
+            self.set_status_message("Status: Live Voice is generating; stop it before starting a file render.")
+            return
         if self.api_busy:
             self.set_status_message("Status: Busy with a request from the local API; try again in a moment.")
             return

@@ -11,6 +11,9 @@ class RvcFeasibilityTests(unittest.TestCase):
     def test_sanitize_requirements_removes_upstream_mirror_directives(self):
         text = """--index-url https://mirror.example/simple
 --extra-index-url https://torch.example
+torch==2.7.1+cu128
+torchaudio==2.7.1+cu128
+torchvision==0.22.1
 numpy>=1.26,<2
 # comment
 soundfile>=0.13,<1
@@ -19,6 +22,9 @@ soundfile>=0.13,<1
 
         self.assertNotIn("--index-url", result)
         self.assertNotIn("--extra-index-url", result)
+        self.assertNotIn("torch==", result)
+        self.assertNotIn("torchaudio==", result)
+        self.assertNotIn("torchvision==", result)
         self.assertIn("numpy>=1.26,<2", result)
         self.assertIn("soundfile>=0.13,<1", result)
 

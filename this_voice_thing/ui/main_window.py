@@ -55,6 +55,7 @@ from this_voice_thing.ui.pages.finishing import Finishing
 from this_voice_thing.ui.pages.generate import GeneratePage
 from this_voice_thing.ui.pages.generation import Generation
 from this_voice_thing.ui.pages.library import Library
+from this_voice_thing.ui.pages.live_voice import LiveVoicePage
 from this_voice_thing.ui.pages.model_loading import ModelLoading
 from this_voice_thing.ui.pages.model_settings import ModelSettings
 from this_voice_thing.ui.pages.models import ModelPage
@@ -69,8 +70,8 @@ from this_voice_thing.ui.pages.voice_use import VoiceUse
 
 
 class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, EngineControls, Player,
-                    StudioPage, VoicePage, VoicePicker, Library, VoiceUse, Recording, TranscribePage, ModelPage, Discover, ModelLoading, ModelSettings,
-                    AdvancedPage, ApiServer, Pronunciations, QMainWindow):
+                    LiveVoicePage, StudioPage, VoicePage, VoicePicker, Library, VoiceUse, Recording, TranscribePage,
+                    ModelPage, Discover, ModelLoading, ModelSettings, AdvancedPage, ApiServer, Pronunciations, QMainWindow):
     log_message_signal = Signal(str)
 
     def __init__(self):
@@ -176,7 +177,7 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
             self.generate_button.setEnabled(False)
         QTimer.singleShot(0, self.restart_api_server)
 
-    PAGE_GENERATE, PAGE_STUDIO, PAGE_VOICE, PAGE_TRANSCRIBE, PAGE_MODEL, PAGE_ADVANCED, PAGE_LOG = range(7)
+    PAGE_GENERATE, PAGE_LIVE_VOICE, PAGE_STUDIO, PAGE_VOICE, PAGE_TRANSCRIBE, PAGE_MODEL, PAGE_ADVANCED, PAGE_LOG = range(8)
 
     def _make_card(self, title=None):
         card = ui_theme.CardFrame()
@@ -235,7 +236,7 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
         self.sidebar.setObjectName("Sidebar")
         self.sidebar.setFixedWidth(180)
         self.sidebar.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        for label in ("Generate", "Studio", "Voices", "Transcribe", "Model", "Advanced", "Log"):
+        for label in ("Generate", "Live Voice", "Studio", "Voices", "Transcribe", "Model", "Advanced", "Log"):
             self.sidebar.addItem(QListWidgetItem(label))
         title_row = QHBoxLayout()
         title_row.setContentsMargins(18, 16, 12, 10)
@@ -262,6 +263,7 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
         root_layout.addWidget(content_area, 1)
 
         self._build_generate_page()
+        self._build_live_voice_page()
         self._build_studio_page()
         self._build_voice_page()
         self._build_transcribe_page()
@@ -414,6 +416,13 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
     OPENAI_VOICES = {"alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"}
 
     def on_page_changed(self, page):
+        if page == self.PAGE_LIVE_VOICE:
+            self.refresh_live_voice_summary()
+            self.refresh_live_audio_devices()
+            if not getattr(self, "live_board_defaults_applied", False) \
+                    and self.soundboard_defaults_can_apply():
+                self.apply_soundboard_board_defaults(self.soundboard_store.active_board())
+                self.live_board_defaults_applied = True
         if page == self.PAGE_STUDIO and not self.studio_busy:
             self._fill_studio_engines()  # models may have been added or installed meanwhile
         if page == self.PAGE_MODEL and getattr(self, "discover_results", None) is None \
@@ -427,6 +436,17 @@ class ChatterboxApp(GeneratePage, Generation, Documents, Estimates, Finishing, E
             self.set_status_message(current_tooltip)
 
     def closeEvent(self, event):
+        if hasattr(self, "live_hotkeys"):
+            self.live_hotkeys.close()
+        if hasattr(self, "live_mic_input"):
+            self.live_mic_input.stop()
+        if hasattr(self, "live_audio_output"):
+            self.live_audio_output.stop()
+        if hasattr(self, "live_monitor_output"):
+            self.live_monitor_output.stop()
+        if getattr(self, "live_speech_thread", None) is not None:
+            self.live_speech_thread.stop()
+            self.live_speech_thread.wait()
         # the console tee in common forwards to this sink
         if self.api_server is not None:
             self.api_server.stop()

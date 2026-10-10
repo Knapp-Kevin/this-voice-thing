@@ -98,6 +98,8 @@ This step separates Windows/driver/application routing from model inference.
 
 ## 5. VoxCPM2 native Live Voice
 
+Run this section once per **VoxCPM2 live** setting (Low latency · 6, Balanced · 8, Full quality · 10). Live Voice only; Generate always uses 10 steps. Record which setting each run used: the mode label and diagnostics (`native_timesteps`) show it.
+
 In the app:
 
 1. load/select VoxCPM2 and the test voice

@@ -30,6 +30,19 @@ PACKAGES = [["voxcpm==2.0.3", "torch==2.8.0", "torchaudio==2.8.0"]]
 # paragraph per section keeps delivery steady.
 MAX_SECTION_CHARS = 400
 MODES = {"clone": "Voice cloning", "design": "Voice design"}
+# Diffusion steps for Live Voice native streaming. Generate and the local API keep the
+# model's default (10). On an RTX 5070 Ti, 10 steps stream slightly slower than real
+# time (RTF ~1.05, so playback gaps); 8 and 6 trade some fidelity for headroom.
+DEFAULT_TIMESTEPS = 10
+LIVE_STEP_PRESETS = {
+    "full": (10, "Full quality · 10 steps"),
+    "balanced": (8, "Balanced · 8 steps"),
+    "low_latency": (6, "Low latency · 6 steps"),
+}
+# Live default, promoted 2026-10-10 after target-machine evidence (#13): 6 steps had
+# 0 underruns (RTF ~0.79) where 10 steps gapped (RTF ~1.13), and an owner listening
+# check found it smoother with the voice "about the same". Generate stays at 10.
+DEFAULT_LIVE_PRESET = "low_latency"
 
 # VoxCPM2 detects the language from the text; this list only drives the Language box.
 LANGUAGE_LABELS = {
@@ -73,7 +86,7 @@ class VoxCPMModel:
         self.ref_text = ""   # transcript of the reference clip, for closer cloning
         self.watermark = True
         self.cfg_value = 2.0
-        self.timesteps = 10
+        self.timesteps = DEFAULT_TIMESTEPS
         self._watermark = engine_worker.PerthWatermark()
         self._temp_dir = tempfile.mkdtemp(prefix="voxcpm_tts_")
         self._anchor = None
@@ -96,10 +109,11 @@ class VoxCPMModel:
     def generate(self, text, **kwargs):
         return self.generate_batch([text], **kwargs)[0]
 
-    def _generation_request(self, text, audio_prompt_path=None, cmd="generate", out_path=None):
+    def _generation_request(self, text, audio_prompt_path=None, cmd="generate", out_path=None, timesteps=None):
         request = dict(cmd=cmd, text=text, style="",
                        seed=int(torch.initial_seed() % 2**31),
-                       cfg_value=self.cfg_value, timesteps=self.timesteps)
+                       cfg_value=self.cfg_value,
+                       timesteps=int(timesteps) if timesteps else self.timesteps)
         if out_path is not None:
             request["out_path"] = out_path
         if self.voxcpm_mode == "design":
@@ -129,7 +143,7 @@ class VoxCPMModel:
             results.append(torch.from_numpy(np.ascontiguousarray(wav)).unsqueeze(0))
         return results
 
-    def generate_streaming_pcm(self, text, audio_prompt_path=None):
+    def generate_streaming_pcm(self, text, audio_prompt_path=None, timesteps=None):
         """Yield model-native mono s16le PCM chunks from VoxCPM2.
 
         This is intentionally a raw/live path: whole-waveform finishing and the
@@ -139,7 +153,8 @@ class VoxCPMModel:
         """
         if not self.native_streaming:
             raise RuntimeError("Native PCM streaming is available only for VoxCPM2.")
-        request = self._generation_request(text, audio_prompt_path, cmd="generate_stream")
+        request = self._generation_request(text, audio_prompt_path, cmd="generate_stream", timesteps=timesteps)
+        self.last_stream_timesteps = request["timesteps"]
         cancel_path = os.path.join(self._temp_dir, f"cancel_{uuid.uuid4().hex}")
         request["cancel_path"] = cancel_path
         self.last_stream_metrics = {}

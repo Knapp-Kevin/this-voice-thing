@@ -44,8 +44,11 @@ class LiveSpeechSession:
         paragraph_pause=0.35,
         pronunciations=None,
         generate_kwargs=None,
+        native_timesteps=None,
     ):
         self.model = model
+        # Diffusion steps for native streaming (VoxCPM2 Live Voice); None = model default.
+        self.native_timesteps = int(native_timesteps) if native_timesteps else None
         self.text = str(text or "").strip()
         self.audio_prompt_path = audio_prompt_path
         self.language_id = language_id or "en"
@@ -96,10 +99,10 @@ class LiveSpeechSession:
 
     def _source(self, spoken_text):
         if self.delivery_mode == "native":
-            return self.model.generate_streaming_pcm(
-                spoken_text,
-                audio_prompt_path=self.audio_prompt_path,
-            )
+            kwargs = {"audio_prompt_path": self.audio_prompt_path}
+            if self.native_timesteps:
+                kwargs["timesteps"] = self.native_timesteps
+            return self.model.generate_streaming_pcm(spoken_text, **kwargs)
         if self.delivery_mode == "segmented":
             return self.model.generate_segmented_pcm(
                 spoken_text,
@@ -164,6 +167,10 @@ class LiveSpeechSession:
             "rtf": round(wall / audio_seconds, 4) if audio_seconds else None,
             "cancelled": bool(self.cancelled),
             "provenance": self.provenance,
+            "native_timesteps": (
+                getattr(self.model, "last_stream_timesteps", None) or self.native_timesteps
+                if self.delivery_mode == "native" else None
+            ),
         }
 
 

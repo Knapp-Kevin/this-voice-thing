@@ -27,6 +27,7 @@ from this_voice_thing.core import live_routes, soundboard, voice_library
 from this_voice_thing.core.live_voice import AudioFileSpeechSession, CachedSpeechSession, LiveSpeechSession
 from this_voice_thing.core.microphone_audio import MicrophoneEffectsConfig
 from this_voice_thing.engines import vibevoice as vibevoice_engine
+from this_voice_thing.engines import voxcpm as voxcpm_engine
 from this_voice_thing.ui.global_hotkeys import GlobalHotkeyManager, HotkeyError, normalize_hotkey
 from this_voice_thing.ui.live_audio import LiveAudioOutput, LiveSpeechThread
 from this_voice_thing.ui.live_capture import LiveAudioInput
@@ -191,6 +192,19 @@ class LiveVoicePage:
             self.on_live_source_mode_changed
         )
         source_row.addWidget(self.live_source_mode_combo)
+        self.live_voxcpm_steps_label = QLabel("VoxCPM2 live")
+        source_row.addWidget(self.live_voxcpm_steps_label)
+        self.live_voxcpm_steps_combo = QComboBox()
+        for key, (_steps, label) in voxcpm_engine.LIVE_STEP_PRESETS.items():
+            self.live_voxcpm_steps_combo.addItem(label, key)
+        saved_preset = self.app_settings.setdefault("live_voice", {}).get(
+            "voxcpm_live_preset", voxcpm_engine.DEFAULT_LIVE_PRESET)
+        self.live_voxcpm_steps_combo.setCurrentIndex(max(0, self.live_voxcpm_steps_combo.findData(saved_preset)))
+        self.live_voxcpm_steps_combo.setToolTip(
+            "Diffusion steps for VoxCPM2 Live Voice only (Generate always uses 10). Fewer steps "
+            "start sooner and keep up with playback; 10 steps can fall behind and leave gaps.")
+        self.live_voxcpm_steps_combo.currentIndexChanged.connect(self.on_live_voxcpm_steps_changed)
+        source_row.addWidget(self.live_voxcpm_steps_combo)
         source_row.addStretch(1)
         route_layout.addLayout(source_row)
         layout.addWidget(route_card)
@@ -507,9 +521,25 @@ class LiveVoicePage:
         self.live_voice_shortcuts.append(shortcut)
         return shortcut
 
+    def live_voxcpm_timesteps(self):
+        """Steps for VoxCPM2 native Live Voice streaming (None when another model is loaded)."""
+        if not getattr(self.model, "native_streaming", False) or getattr(self.model, "backend", "") != "voxcpm":
+            return None
+        key = self.live_voxcpm_steps_combo.currentData() or voxcpm_engine.DEFAULT_LIVE_PRESET
+        return voxcpm_engine.LIVE_STEP_PRESETS.get(key, voxcpm_engine.LIVE_STEP_PRESETS["full"])[0]
+
+    def on_live_voxcpm_steps_changed(self, _index):
+        self.app_settings.setdefault("live_voice", {})["voxcpm_live_preset"] = (
+            self.live_voxcpm_steps_combo.currentData() or voxcpm_engine.DEFAULT_LIVE_PRESET)
+
     def refresh_live_voice_summary(self):
         if not hasattr(self, "live_voice_name_label"):
             return
+        if hasattr(self, "live_voxcpm_steps_combo"):
+            native_voxcpm = (getattr(self.model, "native_streaming", False)
+                             and getattr(self.model, "backend", "") == "voxcpm")
+            self.live_voxcpm_steps_label.setVisible(bool(native_voxcpm))
+            self.live_voxcpm_steps_combo.setVisible(bool(native_voxcpm))
         voice = None
         if self.active_voice_id:
             voice = self.voice_library.get(self.active_voice_id)
@@ -1224,6 +1254,7 @@ class LiveVoicePage:
             paragraph_pause=finishing.paragraph_pause,
             pronunciations=self.pronunciations,
             generate_kwargs=self._live_generate_kwargs(),
+            native_timesteps=self.live_voxcpm_timesteps(),
         )
 
     def live_submit(self):
@@ -1354,9 +1385,10 @@ class LiveVoicePage:
                 except Exception as exc:
                     self.on_live_monitor_error(str(exc))
 
+        steps = self.live_voxcpm_timesteps() if mode == "native" else None
         self.live_mode_label.setText(
             {
-                "native": "Native streaming",
+                "native": f"Native streaming · {steps} steps" if steps else "Native streaming",
                 "segmented": "Segmented streaming",
                 "cached": "Cached playback",
                 "audio": "Audio clip",
@@ -1455,6 +1487,10 @@ class LiveVoicePage:
             details.append(f"TTFA {ttfa:.2f}s")
         if rtf is not None:
             details.append(f"RTF {rtf:.2f}")
+        if metrics.get("mode") == "native" and rtf is not None and rtf > 1.0:
+            # Slower than real time: the output will run dry and gap. Say so plainly.
+            details.append("generating slower than playback, expect gaps"
+                           + (" (try fewer VoxCPM2 live steps)" if (metrics.get("native_timesteps") or 0) > 6 else ""))
         if details:
             self.live_status_label.setText(" · ".join(details))
 

@@ -312,6 +312,7 @@ In other words, calling the whole thing “Chatterbox UI” eventually became le
 - **Test route** speaks a short phrase through the active route using the current voice.
 - A previously saved primary device that disappears is shown as unavailable. Live Voice does **not** silently fall back to the system speakers.
 - The page reports whether the selected item is using **Native streaming**, **Segmented streaming**, **Buffered fallback**, or **Cached** playback.
+- **VoxCPM2 live** quality: **Low latency · 6 steps** (default), **Balanced · 8**, or **Full quality · 10**. This setting applies to Live Voice only; Generate always uses 10 steps. On an RTX 5070 Ti, 10 steps generates slightly slower than real time and leaves gaps, while 6 steps keeps ahead of playback. The status line warns when generation falls behind.
 - VoxCPM2 uses native model streaming. Kokoro uses short segmented generation. Other compatible loaded engines can still speak here after completing the utterance.
 - Live playback has its own bounded audio buffer and converts the model's native sample rate when the selected device requires a different supported rate.
 
